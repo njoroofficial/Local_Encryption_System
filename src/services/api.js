@@ -3,6 +3,13 @@ import axios from 'axios';
 const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:5000/api';
 const API_TIMEOUT = process.env.REACT_APP_API_TIMEOUT || 30000;
 
+// Log API configuration for debugging
+console.log('API Configuration:', { 
+  baseURL: API_URL, 
+  timeout: parseInt(API_TIMEOUT),
+  envUrl: process.env.REACT_APP_API_URL
+});
+
 const api = axios.create({
   baseURL: API_URL,
   timeout: parseInt(API_TIMEOUT),
@@ -24,10 +31,38 @@ export const testBackendConnection = async () => {
 // signup route
 export const signUp = async (userData) => {
   try {
+    console.log('Attempting signup with:', { 
+      email: userData.email,
+      firstName: userData.first_name,
+      url: `${API_URL}/auth/signup`
+    });
+    
     const response = await api.post('/auth/signup', userData);
+    console.log('Signup successful:', response.data);
     return response.data;
   } catch (error) {
-    throw error.response?.data?.error || 'Signup failed';
+    console.error('Signup error details:', {
+      message: error.message,
+      status: error.response?.status,
+      data: error.response?.data,
+      config: error.config
+    });
+    
+    // More detailed error handling
+    if (error.response) {
+      // The request was made and the server responded with a status code
+      // that falls out of the range of 2xx
+      console.error('Server responded with error:', error.response.data);
+      throw error.response.data.error || 'Signup failed: Server error';
+    } else if (error.request) {
+      // The request was made but no response was received
+      console.error('No response received from server');
+      throw 'Signup failed: No response from server. Check if backend is running.';
+    } else {
+      // Something happened in setting up the request that triggered an Error
+      console.error('Error setting up request:', error.message);
+      throw error.message || 'Signup failed';
+    }
   }
 };
 
@@ -36,6 +71,12 @@ export const signIn = async (credentials) => {
   try {
     console.log('Attempting signin with:', { email: credentials.email });
     const response = await api.post('/auth/signin', credentials);
+    
+    // Log the full response for debugging
+    console.log('Signin response from server:', {
+      message: response.data.message,
+      userData: response.data.user
+    });
     
     if (response.data && response.data.user) {
       // Store user data in localStorage
@@ -49,16 +90,41 @@ export const signIn = async (credentials) => {
       throw new Error('Invalid response format from server');
     }
   } catch (error) {
-    console.error('Sign in error:', error.response?.data || error.message);
-    throw error.response?.data?.error || 'Sign in failed';
+    console.error('Signin error:', error);
+    if (error.response && error.response.data) {
+      throw error.response.data;
+    }
+    throw error;
+  }
+};
+
+// resend verification email
+export const resendVerificationEmail = async (email) => {
+  try {
+    const response = await api.post('/auth/resend-verification', { email });
+    return response.data;
+  } catch (error) {
+    console.error('Resend verification error:', error);
+    if (error.response && error.response.data) {
+      throw error.response.data;
+    }
+    throw error;
   }
 };
 
 export const createVault = async (vaultData) => {
   try {
+    console.log('Creating vault with data:', {
+      vaultName: vaultData.vault_name,
+      userId: vaultData.user_id,
+      hasVaultKey: !!vaultData.vault_key
+    });
+    
     const response = await api.post('/vault/create', vaultData);
+    console.log('Vault created successfully:', response.data);
     return response.data;
   } catch (error) {
+    console.error('Vault creation error:', error.response?.data || error.message);
     throw error.response?.data?.error || 'Failed to create vault';
   }
 };
@@ -71,19 +137,23 @@ export const logout = () => {
 
 export const fetchUserVaults = async (userId) => {
   try {
+    console.log('Fetching vaults for user:', userId);
     const response = await api.get(`/vaults/${userId}`);
+    console.log('Fetched vaults:', response.data);
     return response.data;
   } catch (error) {
+    console.error('Error fetching vaults:', error.response?.data || error.message);
     throw error.response?.data?.error || 'Failed to fetch vaults';
   }
 };
 
 export const deleteVault = async (vaultId, userId) => {
   try {
-    console.log('Deleting vault:', vaultId);
+    console.log('Deleting vault:', vaultId, 'for user:', userId);
     const response = await api.delete(`/vaults/${vaultId}`, {
       data: { userId }
     });
+    console.log('Vault deleted successfully:', response.data);
     return response.data;
   } catch (error) {
     console.error('Delete vault error:', error.response?.data || error.message);
@@ -93,13 +163,16 @@ export const deleteVault = async (vaultId, userId) => {
 
 export const verifyVaultKey = async (vaultId, vaultKey, userCredentials = null) => {
   try {
+    console.log('Verifying access to vault:', vaultId);
     const data = userCredentials 
       ? { ...userCredentials }
       : { vault_key: vaultKey };
       
     const response = await api.post(`/vaults/${vaultId}/verify`, data);
+    console.log('Vault access verified successfully');
     return response.data;
   } catch (error) {
+    console.error('Vault verification error:', error.response?.data || error.message);
     throw error.response?.data?.error || 'Failed to verify vault key';
   }
 };

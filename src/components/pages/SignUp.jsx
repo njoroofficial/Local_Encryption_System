@@ -1,11 +1,11 @@
 import { useState } from "react";
-import supabase from "../../lib/helper/supabaseClient";
 import { useNavigate } from "react-router-dom";
 import PersonIcon from "@mui/icons-material/Person";
 import EmailIcon from "@mui/icons-material/Email";
 import LockIcon from "@mui/icons-material/Lock";
 import VisibilityIcon from "@mui/icons-material/Visibility";
 import VisibilityOffIcon from "@mui/icons-material/VisibilityOff";
+import { signUp } from "../../services/api";
 import "../../styles/sign_up.css";
 
 export default function SignUp() {
@@ -18,61 +18,113 @@ export default function SignUp() {
     password: "",
     confirmPassword: "",
   });
-  const [error, setError] = useState("");
+  const [errors, setErrors] = useState({});
+  const [generalError, setGeneralError] = useState("");
   const [success, setSuccess] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [isVerificationStep, setIsVerificationStep] = useState(false);
 
+  // Client-side validation function
+  const validateForm = () => {
+    const newErrors = {};
+    
+    // First name validation
+    if (!formData.first_name.trim()) {
+      newErrors.first_name = "First name is required";
+    }
+    
+    // Last name validation
+    if (!formData.last_name.trim()) {
+      newErrors.last_name = "Last name is required";
+    }
+    
+    // Email validation
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!formData.email.trim()) {
+      newErrors.email = "Email is required";
+    } else if (!emailRegex.test(formData.email)) {
+      newErrors.email = "Please enter a valid email address";
+    }
+    
+    // Password validation
+    if (!formData.password) {
+      newErrors.password = "Password is required";
+    } else if (formData.password.length < 8) {
+      newErrors.password = "Password must be at least 8 characters long";
+    } else if (!/(?=.*[A-Za-z])(?=.*\d)/.test(formData.password)) {
+      newErrors.password = "Password must contain at least one letter and one number";
+    }
+    
+    // Confirm password validation
+    if (formData.password !== formData.confirmPassword) {
+      newErrors.confirmPassword = "Passwords do not match";
+    }
+    
+    setErrors(newErrors);
+    return Object.keys(newErrors).length === 0;
+  };
+
   const handleInputChange = (e) => {
     const { name, value } = e.target;
     setFormData((prev) => ({ ...prev, [name]: value }));
+    
+    // Clear error for this field when user starts typing
+    if (errors[name]) {
+      setErrors(prev => ({ ...prev, [name]: "" }));
+    }
   };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-    setError("");
+    setGeneralError("");
     setSuccess("");
-    setIsLoading(true);
-
-    if (formData.password !== formData.confirmPassword) {
-      setError("Passwords do not match");
-      setIsLoading(false);
+    
+    // Validate form
+    const isValid = validateForm();
+    if (!isValid) {
       return;
     }
+    
+    setIsLoading(true);
 
     try {
-      // Supabase signup
-      console.log("this is the formData", formData);
-      const { data, error } = await supabase.auth.signUp({
+      // Use the API service for signup instead of direct fetch
+      const userData = {
+        first_name: formData.first_name,
+        last_name: formData.last_name,
         email: formData.email,
         password: formData.password,
-        options: {
-          emailRedirectTo: 'http://localhost:5001/auth/callback',
-          data: {
-            first_name: formData.first_name,
-            last_name: formData.last_name,
-          },
+      };
       
-        },
-      });
-
-      if (error) {
-        console.log("Failed to sign up", error);
-        setError(error.message || "Failed to sign up. Please try again.");
-      } else if (data) {
-        setIsVerificationStep(true);
-        setSuccess(`Registration successful! Please check your email (${formData.email}) to verify your account.`);
+      const data = await signUp(userData);
+      
+      // Success case
+      setIsVerificationStep(true);
+      setSuccess(`Registration successful! Please check your email (${formData.email}) to verify your account.`);
+    } catch (error) {
+      console.error("Error during signup:", error);
+      
+      // Handle validation errors
+      if (error.response && error.response.data) {
+        if (error.response.data.errors && Array.isArray(error.response.data.errors)) {
+          const backendErrors = {};
+          error.response.data.errors.forEach(err => {
+            backendErrors[err.param] = err.msg;
+          });
+          setErrors(backendErrors);
+        } else {
+          setGeneralError(error.response.data.error || "Registration failed. Please try again.");
+        }
+      } else {
+        setGeneralError(error.message || "Connection error. Please check your internet connection and try again.");
       }
-    } catch (err) {
-      setError(err.message || "Failed to sign up. Please try again.");
-      console.log("Failed to sign up", err);
     } finally {
       setIsLoading(false);
     }
   };
 
   const handleBackToSignIn = () => {
-    navigate("/signin");
+    navigate("/SignIn");
   };
 
   // If we're showing verification instructions
@@ -109,9 +161,10 @@ export default function SignUp() {
       <div className="signup-card">
         <h2 className="signup-title">Create an account</h2>
         <p className="signup-description">Enter your details to get started</p>
+        {generalError && <p className="error-message general-error">{generalError}</p>}
         <form onSubmit={handleSubmit} className="signup-form" autoComplete="off">
           <div className="input-group">
-            <label htmlFor="username">First Name</label>
+            <label htmlFor="first_name">First Name</label>
             <div className="input-wrapper">
               <PersonIcon className="icon" />
               <input
@@ -125,6 +178,7 @@ export default function SignUp() {
                 autoComplete="off"
               />
             </div>
+            {errors.first_name && <p className="field-error">{errors.first_name}</p>}
           </div>
           <div className="input-group">
             <label htmlFor="last_name">Last Name</label>
@@ -141,6 +195,7 @@ export default function SignUp() {
                 autoComplete="off"
               />
             </div>
+            {errors.last_name && <p className="field-error">{errors.last_name}</p>}
           </div>
           <div className="input-group">
             <label htmlFor="email">Email</label>
@@ -157,6 +212,7 @@ export default function SignUp() {
                 autoComplete="off"
               />
             </div>
+            {errors.email && <p className="field-error">{errors.email}</p>}
           </div>
           <div className="input-group">
             <label htmlFor="password">Password</label>
@@ -180,6 +236,7 @@ export default function SignUp() {
                 {showPassword ? <VisibilityOffIcon /> : <VisibilityIcon />}
               </button>
             </div>
+            {errors.password && <p className="field-error">{errors.password}</p>}
           </div>
           <div className="input-group">
             <label htmlFor="confirmPassword">Confirm Password</label>
@@ -196,8 +253,8 @@ export default function SignUp() {
                 autoComplete="new-password"
               />
             </div>
+            {errors.confirmPassword && <p className="field-error">{errors.confirmPassword}</p>}
           </div>
-          {error && <p className="error-message">{error}</p>}
           <button 
             className="signup-button" 
             type="submit" 
@@ -207,7 +264,7 @@ export default function SignUp() {
           </button>
         </form>
         <p className="signin-text">
-          Already have an account? <a href="/signin" className="signin-link">Sign in</a>
+          Already have an account? <a href="/SignIn" className="signin-link">Sign in</a>
         </p>
       </div>
     </div>

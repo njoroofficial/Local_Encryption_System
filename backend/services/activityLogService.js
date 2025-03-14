@@ -1,4 +1,5 @@
 import db from '../database.js';
+import { supabase } from '../supabaseClient.js';
 
 /**
  * Format activity details with additional context
@@ -31,25 +32,27 @@ function formatActivityDetails(activity) {
  */
 async function logActivity(userId, actionType, details, vaultId = null, fileId = null, req = null) {
     try {
-        const query = `
-            INSERT INTO activity_logs 
-            (user_id, action_type, details, vault_id, file_id, ip_address, user_agent)
-            VALUES ($1, $2, $3, $4, $5, $6, $7)
-            RETURNING log_id
-        `;
+        // Use Supabase to log the activity
+        const { data, error } = await supabase
+            .from('activity_logs')
+            .insert({
+                user_id: userId,
+                action_type: actionType,
+                description: details,
+                vault_id: vaultId,
+                file_id: fileId,
+                ip_address: req?.ip || null,
+                user_agent: req?.headers?.['user-agent'] || null
+            })
+            .select('log_id')
+            .single();
 
-        const values = [
-            userId,
-            actionType,
-            details,
-            vaultId,
-            fileId,
-            req?.ip || null,
-            req?.headers?.['user-agent'] || null
-        ];
-
-        const result = await db.query(query, values);
-        return result.rows[0];
+        if (error) {
+            console.error('Supabase error logging activity:', error);
+            throw error;
+        }
+        
+        return data;
     } catch (error) {
         console.error('Error logging activity:', error);
         throw new Error('Failed to log activity');
@@ -69,47 +72,62 @@ async function getActivities(userId, page = 1, limit = 10) {
 
     const offset = (page - 1) * limit;
     
-    const query = `
-        SELECT 
-            al.log_id as id,
-            al.action_type as "actionType",
-            al.details,
-            al.timestamp,
-            al.vault_id,
-            al.file_id,
-            v.vault_name,
-            f.file_name,
-            f.file_type,
-            f.file_size
-        FROM activity_logs al
-        LEFT JOIN vaultTable v ON al.vault_id = v.vault_id
-        LEFT JOIN fileTable f ON al.file_id = f.file_id
-        WHERE al.user_id = $1
-        ORDER BY al.timestamp DESC
-        LIMIT $2 OFFSET $3
-    `;
-
-    const countQuery = `
-        SELECT COUNT(*) 
-        FROM activity_logs 
-        WHERE user_id = $1
-    `;
-
     try {
-        const [activities, countResult] = await Promise.all([
-            db.query(query, [userId, limit, offset]),
-            db.query(countQuery, [userId])
-        ]);
+        // Use Supabase to fetch activities with pagination
+        const { data: activities, error: activitiesError, count } = await supabase
+            .from('activity_logs')
+            .select(`
+                log_id,
+                action_type,
+                description,
+                vault_id,
+                file_id,
+                ip_address,
+                user_agent,
+                created_at,
+                vaults:vault_id(vault_name),
+                files:file_id(file_name,file_type,file_size)
+            `, { count: 'exact' })
+            .eq('user_id', userId)
+            .order('created_at', { ascending: false })
+            .range(offset, offset + limit - 1);
 
-        const totalCount = parseInt(countResult.rows[0].count);
+        if (activitiesError) {
+            console.error('Supabase error fetching activities:', activitiesError);
+            throw activitiesError;
+        }
+
+        const totalCount = count || 0;
         const totalPages = Math.ceil(totalCount / limit);
 
         // Format the activities data
-        const formattedActivities = activities.rows.map(activity => ({
-            ...activity,
-            formattedTime: new Date(activity.timestamp).toLocaleString(),
-            details: formatActivityDetails(activity)
-        }));
+        const formattedActivities = activities.map(activity => {
+            // Extract vault and file information from the nested objects
+            const vault_name = activity.vaults?.vault_name || null;
+            const file_name = activity.files?.file_name || null;
+            const file_type = activity.files?.file_type || null;
+            const file_size = activity.files?.file_size || null;
+
+            return {
+                id: activity.log_id,
+                actionType: activity.action_type,
+                details: activity.description,
+                timestamp: activity.created_at,
+                vault_id: activity.vault_id,
+                file_id: activity.file_id,
+                vault_name,
+                file_name,
+                file_type,
+                file_size,
+                formattedTime: new Date(activity.created_at).toLocaleString(),
+                details: formatActivityDetails({
+                    details: activity.description,
+                    vault_name,
+                    file_name,
+                    file_type
+                })
+            };
+        });
 
         return {
             activities: formattedActivities,
@@ -136,94 +154,82 @@ async function searchActivities(userId, searchTerm = '', filters = {}, page = 1,
 
     const offset = (page - 1) * limit;
     try {
-        let query = `
-            SELECT 
-                al.log_id as id,
-                al.action_type as "actionType",
-                al.details,
-                al.timestamp,
-                al.vault_id,
-                al.file_id,
-                v.vault_name,
-                f.file_name,
-                f.file_type,
-                f.file_size
-            FROM activity_logs al
-            LEFT JOIN vaultTable v ON al.vault_id = v.vault_id
-            LEFT JOIN fileTable f ON al.file_id = f.file_id
-            WHERE al.user_id = $1
-        `;
+        // Start building the Supabase query
+        let query = supabase
+            .from('activity_logs')
+            .select(`
+                log_id,
+                action_type,
+                description,
+                vault_id,
+                file_id,
+                ip_address,
+                user_agent,
+                created_at,
+                vaults:vault_id(vault_name),
+                files:file_id(file_name,file_type,file_size)
+            `, { count: 'exact' })
+            .eq('user_id', userId);
 
-        let countQuery = `
-            SELECT COUNT(*) 
-            FROM activity_logs al
-            LEFT JOIN vaultTable v ON al.vault_id = v.vault_id
-            LEFT JOIN fileTable f ON al.file_id = f.file_id
-            WHERE al.user_id = $1
-        `;
-
-        const values = [userId];
-        const countValues = [userId];
-        let paramCount = 1;
-
+        // Apply search filters
         if (searchTerm) {
-            paramCount++;
-            const searchCondition = ` AND (
-                al.details ILIKE $${paramCount} OR 
-                v.vault_name ILIKE $${paramCount} OR 
-                f.file_name ILIKE $${paramCount}
-            )`;
-            query += searchCondition;
-            countQuery += searchCondition;
-            values.push(`%${searchTerm}%`);
-            countValues.push(`%${searchTerm}%`);
+            // Using ILIKE for case-insensitive search in description
+            query = query.or(`description.ilike.%${searchTerm}%`);
         }
 
         if (filters.actionType) {
-            paramCount++;
-            const actionCondition = ` AND al.action_type = $${paramCount}`;
-            query += actionCondition;
-            countQuery += actionCondition;
-            values.push(filters.actionType);
-            countValues.push(filters.actionType);
+            query = query.eq('action_type', filters.actionType);
         }
 
         if (filters.startDate) {
-            paramCount++;
-            const startDateCondition = ` AND al.timestamp >= $${paramCount}`;
-            query += startDateCondition;
-            countQuery += startDateCondition;
-            values.push(filters.startDate);
-            countValues.push(filters.startDate);
+            query = query.gte('created_at', filters.startDate);
         }
 
         if (filters.endDate) {
-            paramCount++;
-            const endDateCondition = ` AND al.timestamp <= $${paramCount}`;
-            query += endDateCondition;
-            countQuery += endDateCondition;
-            values.push(filters.endDate);
-            countValues.push(filters.endDate);
+            query = query.lte('created_at', filters.endDate);
         }
 
-        query += ' ORDER BY al.timestamp DESC';
-        query += ` LIMIT $${paramCount + 1} OFFSET $${paramCount + 2}`;
-        values.push(limit, offset);
+        // Apply sorting and pagination
+        const { data: activities, error: activitiesError, count } = await query
+            .order('created_at', { ascending: false })
+            .range(offset, offset + limit - 1);
 
-        const [activities, countResult] = await Promise.all([
-            db.query(query, values),
-            db.query(countQuery, countValues)
-        ]);
+        if (activitiesError) {
+            console.error('Supabase error searching activities:', activitiesError);
+            throw activitiesError;
+        }
 
-        const totalCount = parseInt(countResult.rows[0].count);
+        const totalCount = count || 0;
         const totalPages = Math.ceil(totalCount / limit);
 
         // Format the activities data
-        const formattedActivities = activities.rows.map(activity => ({
-            ...activity,
-            formattedTime: new Date(activity.timestamp).toLocaleString(),
-            details: formatActivityDetails(activity)
-        }));
+        const formattedActivities = activities.map(activity => {
+            // Extract vault and file information from the nested objects
+            const vault_name = activity.vaults?.vault_name || null;
+            const file_name = activity.files?.file_name || null;
+            const file_type = activity.files?.file_type || null;
+            const file_size = activity.files?.file_size || null;
+
+            return {
+                id: activity.log_id,
+                actionType: activity.action_type,
+                details: activity.description,
+                timestamp: activity.created_at,
+                vault_id: activity.vault_id,
+                file_id: activity.file_id,
+                vault_name,
+                file_name,
+                file_type,
+                file_size,
+                formattedTime: new Date(activity.created_at).toLocaleString(),
+                details: formatActivityDetails({
+                    details: activity.description,
+                    vault_name,
+                    file_name,
+                    file_type
+                })
+            };
+        });
 
         return {
             activities: formattedActivities,

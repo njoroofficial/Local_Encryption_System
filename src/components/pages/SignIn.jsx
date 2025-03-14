@@ -5,7 +5,7 @@ import VisibilityOffIcon from '@mui/icons-material/VisibilityOff';
 import VisibilityIcon from '@mui/icons-material/Visibility';
 import "../../styles/signIn.css";
 import { useNavigate } from "react-router-dom";
-import supabase from "../../lib/helper/supabaseClient";
+import { signIn, resendVerificationEmail } from "../../services/api";
 import PropTypes from 'prop-types';
 
 export default function SignIn({ setUserId }) {
@@ -42,45 +42,37 @@ export default function SignIn({ setUserId }) {
     setIsLoading(true);
 
     try {
-      // Sign in with Supabase
-      const { data, error } = await supabase.auth.signInWithPassword({
+      // Sign in using our API service
+      const response = await signIn({
         email: formData.email,
         password: formData.password,
       });
       
-      if (error) {
-        // Check if it's an email verification error
-        if (error.message.includes("Email not confirmed")) {
-          setVerificationError(true);
-          setUserEmail(formData.email);
-        } else {
-          setError(error.message || "Invalid email or password");
-        }
-        return;
-      }
-      
-      if (!data || !data.user) {
-        setError("Sign in failed. Please try again.");
-        return;
-      }
-      
-      // Create a user data object with Supabase info
-      const userData = {
-        userId: data.user.id,
-        email: data.user.email,
-        fullname: data.user.user_metadata?.fullname || data.user.email
-      };
-      
-      // Store user data in localStorage
-      localStorage.setItem('userData', JSON.stringify(userData));
+      // Log user details received from the server
+      console.log('User signed in successfully:', {
+        userId: response.user.userId,
+        fullname: response.user.fullname,
+        email: response.user.email,
+        firstName: response.user.firstName,
+        lastName: response.user.lastName,
+        lastLogin: response.user.lastLogin
+      });
       
       // Update the user ID in the parent component
-      setUserId(userData.userId);
+      setUserId(response.user.userId);
       
       // Navigate to welcome page
       navigate("/welcome-page");
     } catch (err) {
-      setError(err.message || "An error occurred during sign in");
+      console.error("Sign in error:", err);
+      
+      // Check if it's an email verification error
+      if (err.message && err.message.includes("Email not confirmed")) {
+        setVerificationError(true);
+        setUserEmail(formData.email);
+      } else {
+        setError(err.message || "Invalid email or password");
+      }
     } finally {
       setIsLoading(false);
     }
@@ -90,16 +82,8 @@ export default function SignIn({ setUserId }) {
   const handleResendVerification = async () => {
     try {
       setIsLoading(true);
-      const { error } = await supabase.auth.resend({
-        type: 'signup',
-        email: userEmail,
-      });
-      
-      if (error) {
-        setError(error.message || "Failed to resend verification email");
-      } else {
-        alert(`Verification email resent to ${userEmail}. Please check your inbox.`);
-      }
+      await resendVerificationEmail(userEmail);
+      alert(`Verification email resent to ${userEmail}. Please check your inbox.`);
     } catch (err) {
       setError(err.message || "Failed to resend verification email");
     } finally {

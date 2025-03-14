@@ -9,9 +9,68 @@ import mammoth from 'mammoth';
 import XLSX from 'xlsx';
 import { encryptFile, decryptFile } from '../encryptionLogic.js';
 import { logActivity, getActivities, searchActivities } from '../services/activityLogService.js';
+import { supabase, serviceClient } from '../supabaseClient.js';
+import crypto from 'crypto';
+
+
 
 const router = express.Router();
 
+// A buckets cache to track which user vaults map to which buckets
+const bucketMap = new Map();
+
+// Function to get or create a bucket reference for a user's vault
+const getOrCreateBucketReference = async (userId, vaultName) => {
+
+  const bucketName = 'securefiles';
+  
+  try {
+    // Check if the standard bucket exists
+    const { data: bucketInfo, error: checkError } = await supabase
+      .storage
+      .getBucket(bucketName);
+      
+    if (!bucketInfo) {
+      console.log(`Common bucket '${bucketName}' doesn't exist yet. This is normal on first run.`);
+      // We won't try to create it here - the bucket should be created via Supabase dashboard
+      // by the administrator with appropriate policies
+      
+      // Check if the bucket actually exists (case sensitive check)
+      const { data: buckets, error: listError } = await supabase
+        .storage
+        .listBuckets();
+        
+      if (listError) {
+        console.error('Error listing buckets:', listError);
+      } else {
+        console.log('Available buckets:', buckets.map(b => b.name));
+        // Check if our bucket exists but with different case
+        const matchingBucket = buckets.find(b => 
+          b.name.toLowerCase() === bucketName.toLowerCase());
+          
+        if (matchingBucket && matchingBucket.name !== bucketName) {
+          console.log(`Found bucket with different case: '${matchingBucket.name}'. Using this instead.`);
+          return { bucketName: matchingBucket.name, folderPath };
+        }
+      }
+    }
+    
+    // Generate a folder path for this user's vault within the shared bucket
+    // This ensures user data is logically separated even in a shared bucket
+    const folderPath = `${userId}/${vaultName.toLowerCase().replace(/\s+/g, '_')}`;
+    
+    // Store in our local map
+    bucketMap.set(`${userId}_${vaultName}`, { 
+      bucketName,
+      folderPath
+    });
+    
+    return { bucketName, folderPath };
+  } catch (error) {
+    console.error('Error in bucket reference creation:', error);
+    throw error;
+  }
+};
 
 // Test route for connection verification
 router.get('/test', (req, res) => {
@@ -51,6 +110,15 @@ router.get('/test-db', async (req, res) => {
 // signup auth route
 router.post('/auth/signup',
   [
+    // Validate first name
+    body('first_name')
+      .notEmpty()
+      .withMessage('First name is required'),
+    
+    // Validate last name
+    body('last_name')
+      .notEmpty()
+      .withMessage('Last name is required'),
     // Validate email
     body('email')
       .isEmail()
@@ -70,47 +138,63 @@ router.post('/auth/signup',
       return res.status(400).json({ errors: errors.array() });
     }
     
-    const { username, email, password } = req.body;
+    
+    const { email, password, first_name, last_name } = req.body;
 
     try {
-      // Step 1: Check if the email already exists
-      const emailCheckQuery = await db.query('SELECT * FROM userRegistration WHERE email = $1', [email]);
-      if (emailCheckQuery.rows.length > 0) {
-        return res.status(400).json({ 
-          error: 'Email already exists',
-          details: 'The provided email is already associated with an existing account.'
-        });
+      // 1. Creating auth user with metadata
+      const { data: authData, error: authError } = await supabase.auth.signUp({
+        email:email,
+        password:password,
+        options:{
+          emailRedirectTo: 'http://localhost:5001/auth/callback',
+          data:{
+            first_name:first_name,
+            last_name:last_name
+          }
+        }
+      });
+
+      if (authError) {
+        if (authError.message.includes('already registered')) {
+          return res.status(400).json({ error: 'Email already exists' });
+        }
+        throw authError;
       }
 
-      // Get the current count of users
-      const userCountQuery = await db.query('SELECT COUNT(*) FROM userRegistration');
-      const userCount = parseInt(userCountQuery.rows[0].count, 10); 
+      // fetch user data from supabase profiles table
+      const { data: userData, error: fetchError } = await supabase
+        .from('profiles')
+        .select(`
+          first_name,
+          last_name
+        `)
+        .eq('id', authData.user.id)
+        .single();
 
-      // Generate the next user ID
-      const userId = `user${userCount + 1}`; // e.g., user1
+      if (fetchError) throw fetchError;
 
-      // Hash the password
-      const saltRounds = 10;
-      const hashedPassword = await bcrypt.hash(password, saltRounds);
+      // using auth table data directly
+      if (!authData || !authData.user) {
+        throw new Error('Failed to create user');
+      }
 
-      // Insert the new user into the database
-      const newUser = await db.query(
-        'INSERT INTO userRegistration (user_id, fullname, email, password) VALUES ($1, $2, $3, $4) RETURNING *',
-        [userId, username, email, hashedPassword]
-      );
-
-      // Send a success response
-      res.status(201).json({ 
-        message: 'User registered successfully!', 
+      // Return the user data from the auth response
+      res.status(201).json({
+        message: 'User registered successfully',
         user: {
-          userId: newUser.rows[0].user_id,
-          fullname: newUser.rows[0].fullname,
-          email: newUser.rows[0].email
+          id: authData.user.id,
+          email: authData.user.email,
+          first_name: userData.first_name,
+          last_name: userData.last_name
         }
       });
     } catch (err) {
-      console.error(err.message);
-      res.status(500).json({ error: 'Server error' });
+      console.error('Signup error:', err);
+      res.status(500).json({
+        error: 'Registration failed',
+        details: err.message
+      });
     }
   }
 );
@@ -127,61 +211,85 @@ router.post('/auth/signin', async (req, res) => {
       return res.status(400).json({ error: 'Email and password are required' });
     }
 
-    // Check if the user exists
-    const userQuery = await db.query('SELECT * FROM userRegistration WHERE email = $1', [email]);
-    console.log('User found:', !!userQuery.rows.length);
+    // Supabase authentication for signin
+    const { data: authData, error: signInError } = await supabase.auth.signInWithPassword({
+      email: email,
+      password: password
+    });
 
-    if (userQuery.rows.length === 0) {
+    if (signInError) {
+      console.error('Signin error:', signInError);
       return res.status(401).json({ error: 'Invalid email or password' });
     }
 
-    const user = userQuery.rows[0];
+    // If signin successful, fetch user profile data
+    const { data: userData, error: fetchError } = await supabase
+      .from('profiles')
+      .select(`
+        first_name,
+        last_name
+      `)
+      .eq('id', authData.user.id)
+      .single();
 
-    // Compare the provided password with the hashed password
-    const isPasswordValid = await bcrypt.compare(password, user.password);
-    console.log('Password valid:', isPasswordValid);
-
-    if (!isPasswordValid) {
-      return res.status(401).json({ error: 'Invalid email or password' });
+    if (fetchError) {
+      console.error('Error fetching user profile:', fetchError);
+      return res.status(500).json({ error: 'Failed to fetch user profile', details: fetchError.message });
     }
-
-    try {
-      // Update last login timestamp
-      const now = new Date().toISOString();
-      const updateResult = await db.query(
-        'UPDATE userRegistration SET last_login = $1 WHERE user_id = $2 RETURNING last_login, password_change',
-        [now, user.user_id]
-      );
 
       console.log('Login successful, returning user data');
 
-      // Return a success response
+    // Log detailed user information for debugging
+    console.log('User details:', {
+      id: authData.user.id,
+      email: authData.user.email,
+      firstName: userData.first_name,
+      lastName: userData.last_name,
+      fullName: `${userData.first_name} ${userData.last_name}`,
+      lastSignIn: authData.user.last_sign_in_at
+    });
+
+    // Return a success response with user data from Supabase
       res.status(200).json({
         message: 'Signin successful!',
         user: {
-          userId: user.user_id,
-          fullname: user.fullname,
-          email: user.email,
-          lastLogin: updateResult.rows[0]?.last_login || now,
-          passwordChangeDate: updateResult.rows[0]?.password_change || null
-        }
-      });
-    } catch (updateErr) {
-      // If updating last_login fails, still allow login but log the error
-      console.error('Error updating last_login:', updateErr);
-      res.status(200).json({
-        message: 'Signin successful!',
-        user: {
-          userId: user.user_id,
-          fullname: user.fullname,
-          email: user.email,
-          lastLogin: null,
-          passwordChangeDate: null
-        }
-      });
-    }
+        userId: authData.user.id,
+        fullname: `${userData.first_name} ${userData.last_name}`,
+        email: authData.user.email,
+        firstName: userData.first_name,
+        lastName: userData.last_name,
+        lastLogin: authData.user.last_sign_in_at || null
+      }
+    });
   } catch (err) {
     console.error('Signin error:', err);
+    res.status(500).json({ error: 'Server error', details: err.message });
+  }
+});
+// resend verification email route
+router.post('/auth/resend-verification', async (req, res) => {
+  const { email } = req.body;
+  
+  try {
+    // Input validation
+    if (!email) {
+      return res.status(400).json({ error: 'Email is required' });
+    }
+
+    // Use Supabase to resend verification email
+    const { error } = await supabase.auth.resend({
+      type: 'signup',
+      email: email,
+    });
+
+    if (error) {
+      console.error('Resend verification error:', error);
+      return res.status(400).json({ error: error.message });
+    }
+
+    res.status(200).json({ message: 'Verification email resent successfully' });
+  } catch (err) {
+    console.error('Resend verification error:', err);
     res.status(500).json({ error: 'Server error', details: err.message });
   }
 });
@@ -209,37 +317,49 @@ router.post('/vault/create',
     const { vault_name, vault_key, user_id } = req.body;
 
     try {
-      // Check if the user exists
-      const userQuery = await db.query('SELECT * FROM userRegistration WHERE user_id = $1', [user_id]);
-      if (userQuery.rows.length === 0) {
+      // Check if the user exists in Supabase
+      const { data: userData, error: userError } = await supabase
+        .from('profiles')
+        .select('id')
+        .eq('id', user_id)
+        .single();
+
+      if (userError || !userData) {
+        console.error('User verification error:', userError);
         return res.status(400).json({ error: 'User does not exist' });
       }
 
-      // Get the maximum vault number and increment it
-      const maxVaultQuery = await db.query(
-        "SELECT MAX(CAST(SUBSTRING(vault_id FROM 'vault([0-9]+)') AS INTEGER)) as max_num FROM vaultTable"
-      );
-      
-      const maxNum = maxVaultQuery.rows[0].max_num || 0;
-      const newVaultNum = maxNum + 1;
-      const vaultId = `vault${newVaultNum}`;
+      // Get or create bucket reference
+      const { bucketName, folderPath } = await getOrCreateBucketReference(user_id, vault_name);
 
       // Hash the vault key
       const saltRounds = 10;
       const hashedVaultKey = await bcrypt.hash(vault_key, saltRounds);
 
-      // Insert the new vault into the database
-      const newVault = await db.query(
-        'INSERT INTO vaultTable (vault_id, vault_name, vault_key, user_id) VALUES ($1, $2, $3, $4) RETURNING *',
-        [vaultId, vault_name, hashedVaultKey, user_id]
-      );
+      // Insert new vault into Supabase with bucket reference and folder path
+      const { data: newVault, error: vaultError } = await supabase
+        .from('vaults')
+        .insert({
+          vault_name: vault_name,
+          vault_key: hashedVaultKey,
+          user_id: user_id,
+          storage_bucket: bucketName,
+          storage_path: folderPath  // Store the folder path within the bucket
+        })
+        .select()
+        .single();
+
+      if (vaultError) {
+        console.error('Vault creation error:', vaultError);
+        return res.status(500).json({ error: 'Failed to create vault', details: vaultError.message });
+      }
 
       // Log the activity
       await logActivity(
         user_id,
         'VAULT_CREATE',
         `Created new vault: ${vault_name}`,
-        vaultId,
+        newVault.vault_id,
         null,
         req
       );
@@ -248,10 +368,12 @@ router.post('/vault/create',
       res.status(201).json({
         message: 'Vault created successfully!',
         vault: {
-          vaultId: newVault.rows[0].vault_id,
-          vaultName: newVault.rows[0].vault_name,
-          userId: newVault.rows[0].user_id,
-          createdAt: newVault.rows[0].created_at
+          vaultId: newVault.vault_id,
+          vaultName: newVault.vault_name,
+          userId: newVault.user_id,
+          createdAt: newVault.created_at,
+          storageBucket: bucketName,
+          storagePath: folderPath
         }
       });
     } catch (err) {
@@ -266,52 +388,53 @@ router.get('/vaults/:userId', async (req, res) => {
   const { userId } = req.params;
 
   try {
-    // Step 1: Validate the userId
+    // Validate the userId
     if (!userId || typeof userId !== 'string') {
       return res.status(400).json({ error: 'Invalid user ID' });
     }
 
-    // Step 2: Check if the user exists
-    const userQuery = await db.query('SELECT * FROM userRegistration WHERE user_id = $1', [userId]);
-    if (userQuery.rows.length === 0) {
+    // Check if the user exists in Supabase
+    const { data: userData, error: userError } = await supabase
+      .from('profiles')
+      .select('id')
+      .eq('id', userId)
+      .single();
+
+    if (userError || !userData) {
+      console.error('User verification error:', userError);
       return res.status(404).json({ error: 'User not found' });
     }
 
-    // Step 3: Get all vaults for the user with file details
-    const vaultsQuery = await db.query(
-      `SELECT 
-        v.vault_id,
-        v.vault_name,
-        v.created_at,
-        COUNT(f.file_id) as files_count,
-        COALESCE(SUM(f.file_size), 0) as total_size,
-        MAX(f.created_at) as last_accessed
-      FROM vaultTable v
-      LEFT JOIN fileTable f ON v.vault_id = f.vault_id
-      WHERE v.user_id = $1
-      GROUP BY v.vault_id, v.vault_name, v.created_at
-      ORDER BY v.created_at DESC`,
-      [userId]
-    );
+    // Get all vaults for the user from Supabase
+    const { data: vaults, error: vaultsError } = await supabase
+      .from('vaults')
+      .select('*')
+      .eq('user_id', userId)
+      .order('created_at', { ascending: false });
 
-    // Step 4: Format the response
-    const vaults = vaultsQuery.rows.map(vault => ({
+    if (vaultsError) {
+      console.error('Error fetching vaults:', vaultsError);
+      return res.status(500).json({ error: 'Failed to fetch vaults', details: vaultsError.message });
+    }
+
+    
+    // Format the response based on available data
+    const formattedVaults = vaults.map(vault => ({
       id: vault.vault_id,
       name: vault.vault_name,
-      createdAt: new Date(vault.created_at).toLocaleString(), // Format creation date
-      filesCount: vault.files_count || 0,
-      totalSize: vault.total_size || 0, // Total size of files in bytes
-      lastAccessed: vault.last_accessed 
-        ? new Date(vault.last_accessed).toLocaleString() // Format last accessed date
-        : 'Never', // Default if no files exist
+      createdAt: new Date(vault.created_at).toLocaleString(),
+      // If you don't have file info yet, provide defaults
+      filesCount: 0,
+      totalSize: 0,
+      lastAccessed: 'Never',
     }));
 
-    // Step 5: Send the response
-    if (vaults.length === 0) {
+    // Send the response
+    if (formattedVaults.length === 0) {
       return res.status(200).json({ message: 'No vaults found for this user', vaults: [] });
     }
 
-    res.status(200).json({ vaults });
+    res.status(200).json({ vaults: formattedVaults });
   } catch (err) {
     console.error('Error fetching vaults:', err.message);
     res.status(500).json({ error: 'Server error', details: err.message });
@@ -321,43 +444,84 @@ router.get('/vaults/:userId', async (req, res) => {
 // Delete vault route
 router.delete('/vaults/:vaultId', async (req, res) => {
   const { vaultId } = req.params;
-  const { userId } = req.body; // Add userId to request body
+  const { userId } = req.body;
 
   try {
     // First check if the vault exists
-    const vaultCheck = await db.query(
-      'SELECT * FROM vaultTable WHERE vault_id = $1',
-      [vaultId]
+    const { data: vault, error: vaultError } = await supabase
+      .from('vaults')
+      .select('vault_name, storage_bucket, storage_path')
+      .eq('vault_id', vaultId)
+      .eq('user_id', userId)
+      .single();
+    
+    if (vaultError || !vault) {
+      console.error('Vault check error:', vaultError);
+      return res.status(404).json({ error: 'Vault not found or unauthorized' });
+    }
+
+    // Log the activity before deletion
+    await logActivity(
+      userId,
+      'VAULT_DELETE',
+      `Deleted vault: ${vault.vault_name}`,
+      vaultId,
+      null,
+      req
     );
-    
-    if (vaultCheck.rows.length === 0) {
-      return res.status(404).json({ error: 'Vault not found' });
+
+    // Delete all files in the storage folder (not the bucket)
+    if (vault.storage_bucket && vault.storage_path) {
+      // List all files in the vault's folder
+      const { data: fileList, error: listError } = await supabase
+        .storage
+        .from(vault.storage_bucket)
+        .list(vault.storage_path);
+        
+      if (!listError && fileList && fileList.length > 0) {
+        const filesToDelete = fileList.map(file => `${vault.storage_path}/${file.name}`);
+        
+        // Delete all files in the folder
+        const { error: deleteFilesError } = await supabase
+          .storage
+          .from(vault.storage_bucket)
+          .remove(filesToDelete);
+          
+        if (deleteFilesError) {
+          console.error('Error deleting files from storage:', deleteFilesError);
+          // Continue anyway, as we still want to try deleting the vault
+        }
+      }
+      
+      // Note: We don't delete the bucket anymore since it's shared
     }
 
-    const vault = vaultCheck.rows[0];
-
-    // Log the vault deletion before actually deleting
-    if (userId) {
-      await logActivity(
-        userId,
-        'VAULT_DELETE',
-        `Deleted vault: ${vault.vault_name}`,
-        vaultId,
-        null,
-        req
-      );
+    // Delete all associated files records (the cascade will handle file_encryption_keys)
+    const { error: deleteFilesError } = await supabase
+      .from('files')
+      .delete()
+      .eq('vault_id', vaultId);
+      
+    if (deleteFilesError) {
+      console.error('Error deleting file records:', deleteFilesError);
     }
 
-    // Delete associated files first (due to foreign key constraint)
-    await db.query('DELETE FROM fileTable WHERE vault_id = $1', [vaultId]);
-    
-    // Then delete the vault
-    await db.query('DELETE FROM vaultTable WHERE vault_id = $1', [vaultId]);
+    // Delete the vault
+    const { error: deleteError } = await supabase
+      .from('vaults')
+      .delete()
+      .eq('vault_id', vaultId)
+      .eq('user_id', userId);
+
+    if (deleteError) {
+      console.error('Vault deletion error:', deleteError);
+      return res.status(500).json({ error: 'Failed to delete vault', details: deleteError.message });
+    }
 
     res.json({ message: 'Vault deleted successfully' });
   } catch (err) {
-    console.error(err.message);
-    res.status(500).json({ error: 'Server error' });
+    console.error('Server error:', err.message);
+    res.status(500).json({ error: 'Server error', details: err.message });
   }
 });
 
@@ -367,37 +531,41 @@ router.post('/vaults/:vaultId/verify', async (req, res) => {
   const { vault_key, email, password } = req.body;
 
   try {
-    // Get the vault and its details
-    const vaultQuery = await db.query(
-      `SELECT 
-        v.vault_key, 
-        v.user_id, 
-        v.vault_name,
-        u.email, 
-        u.password as user_password 
-      FROM vaultTable v 
-      JOIN userRegistration u ON v.user_id = u.user_id 
-      WHERE v.vault_id = $1`,
-      [vaultId]
-    );
+    // Get the vault details from Supabase
+    const { data: vaultData, error: vaultError } = await supabase
+      .from('vaults')
+      .select('vault_key, user_id, vault_name')
+      .eq('vault_id', vaultId)
+      .single();
     
-    if (vaultQuery.rows.length === 0) {
+    if (vaultError || !vaultData) {
+      console.error('Vault retrieval error:', vaultError);
       return res.status(404).json({ error: 'Vault not found' });
     }
 
-    const vault = vaultQuery.rows[0];
-
-    // If email and password are provided, verify user credentials
+    // If email and password are provided, verify user credentials with Supabase Auth
     if (email && password) {
-      if (email !== vault.email || !await bcrypt.compare(password, vault.user_password)) {
+      // Sign in with Supabase to verify credentials
+      const { data: authData, error: authError } = await supabase.auth.signInWithPassword({
+        email: email,
+        password: password
+      });
+
+      if (authError) {
+        console.error('Authentication error:', authError);
         return res.status(401).json({ error: 'Invalid credentials' });
+      }
+
+      // Check if the authenticated user is the vault owner
+      if (authData.user.id !== vaultData.user_id) {
+        return res.status(403).json({ error: 'User does not own this vault' });
       }
 
       // Log vault access via user credentials
       await logActivity(
-        vault.user_id,
+        vaultData.user_id,
         'VAULT_ACCESS',
-        `Accessed vault: ${vault.vault_name} via user credentials`,
+        `Accessed vault: ${vaultData.vault_name} via user credentials`,
         vaultId,
         null,
         req
@@ -407,23 +575,23 @@ router.post('/vaults/:vaultId/verify', async (req, res) => {
         message: 'Access granted via user verification',
         vault: {
           id: vaultId,
-          name: vault.vault_name,
+          name: vaultData.vault_name,
           vault_key: vault_key
         }
       });
     }
 
     // Verify vault key
-    const isKeyValid = await bcrypt.compare(vault_key, vault.vault_key);
+    const isKeyValid = await bcrypt.compare(vault_key, vaultData.vault_key);
     if (!isKeyValid) {
       return res.status(401).json({ error: 'Invalid vault key' });
     }
 
     // Log vault access via vault key
     await logActivity(
-      vault.user_id,
+      vaultData.user_id,
       'VAULT_ACCESS',
-      `Accessed vault: ${vault.vault_name} via vault key`,
+      `Accessed vault: ${vaultData.vault_name} via vault key`,
       vaultId,
       null,
       req
@@ -433,13 +601,13 @@ router.post('/vaults/:vaultId/verify', async (req, res) => {
       message: 'Vault key verified successfully',
       vault: {
         id: vaultId,
-        name: vault.vault_name,
+        name: vaultData.vault_name,
         vault_key: vault_key
       }
     });
   } catch (err) {
     console.error('Vault key verification error:', err.message);
-    res.status(500).json({ error: 'Server error' });
+    res.status(500).json({ error: 'Server error', details: err.message });
   }
 });
 
@@ -480,19 +648,22 @@ router.post('/file/upload', upload.single('file'), async (req, res) => {
       throw new Error('User ID is required');
     }
 
-    // Check if vault exists and get vault details
-    const vaultQuery = await db.query(
-      'SELECT * FROM vaultTable WHERE vault_id = $1 AND user_id = $2',
-      [vault_id, user_id]
-    );
+    // Get vault details from Supabase, including the storage bucket name and path
+    const { data: vault, error: vaultError } = await supabase
+      .from('vaults')
+      .select('*')
+      .eq('vault_id', vault_id)
+      .eq('user_id', user_id)
+      .single();
     
-    if (vaultQuery.rows.length === 0) {
+    if (vaultError || !vault) {
+      console.error('Vault check error:', vaultError);
       throw new Error('Vault not found or unauthorized access');
     }
 
     // If using vault key, verify that the provided key matches the vault key
     if (use_vault_key) {
-      const isVaultKeyValid = await bcrypt.compare(encryption_key, vaultQuery.rows[0].vault_key);
+      const isVaultKeyValid = await bcrypt.compare(encryption_key, vault.vault_key);
       if (!isVaultKeyValid) {
         throw new Error('Invalid vault key');
       }
@@ -506,60 +677,126 @@ router.post('/file/upload', upload.single('file'), async (req, res) => {
       console.log('Encrypting file...');
       const { iv, encryptedData } = encryptFile(fileBuffer, encryption_key);
       
-      // Generate file ID
-      const fileIdQuery = await db.query(`
-        SELECT COALESCE(MAX(CAST(SUBSTRING(file_id FROM 'file([0-9]+)') AS INTEGER)), 0) + 1 AS next_id
-        FROM fileTable
-      `);
-      const nextFileId = fileIdQuery.rows[0].next_id;
-      const fileId = `file${nextFileId}`;
+      // Generate a file UUID
+      const fileId = crypto.randomUUID();
       
-      // Generate key ID
-      const keyIdQuery = await db.query(`
-        SELECT COALESCE(MAX(CAST(SUBSTRING(key_id FROM 'key([0-9]+)') AS INTEGER)), 0) + 1 AS next_id
-        FROM fileEncryptionKeys
-      `);
-      const nextKeyId = keyIdQuery.rows[0].next_id;
-      const keyId = `key${nextKeyId}`;
+      // Generate a key UUID
+      const keyId = crypto.randomUUID();
       
-      // Save encrypted file
-      const encryptedFilename = `encrypted-${fileId}${path.extname(file.originalname)}`;
-      const uploadsDir = path.join(process.cwd(), 'uploads');
+      // Create file path in Supabase Storage - now with folder path
+      const encryptedFilename = `${vault.storage_path}/${fileId}${path.extname(file.originalname)}`;
       
-      // Ensure uploads directory exists
-      if (!fs.existsSync(uploadsDir)) {
-        fs.mkdirSync(uploadsDir, { recursive: true });
+      // Make sure the folder exists by creating it if needed
+      try {
+        console.log('Checking if folder exists:', vault.storage_path);
+        
+        // Use service client if available, otherwise fall back to regular client
+        const storageClient = serviceClient || supabase;
+        
+        // Try to list files in the path to see if it exists
+        const { data: folderCheck, error: folderCheckError } = await storageClient
+          .storage
+          .from(vault.storage_bucket)
+          .list(vault.storage_path);
+          
+        if (folderCheckError) {
+          console.log('Folder may not exist, attempting to create folder structure:', vault.storage_path);
+          
+          // Create an empty file to establish the folder path
+          const emptyBuffer = Buffer.from('');
+          const folderMarker = `${vault.storage_path}/.folder`;
+          
+          const { error: folderCreateError } = await storageClient
+            .storage
+            .from(vault.storage_bucket)
+            .upload(folderMarker, emptyBuffer);
+            
+          if (folderCreateError) {
+            console.error('Error creating folder structure:', folderCreateError);
+          } else {
+            console.log('Created folder structure successfully');
+          }
+        }
+      } catch (folderError) {
+        console.error('Error checking/creating folder:', folderError);
+        // Continue anyway, the upload might still succeed
       }
       
-      const encryptedFilePath = path.join(uploadsDir, encryptedFilename);
-      console.log('Saving encrypted file to:', encryptedFilePath);
-      fs.writeFileSync(encryptedFilePath, encryptedData, 'hex');
-
+      console.log('Uploading encrypted file to storage:', {
+        bucket: vault.storage_bucket,
+        path: encryptedFilename,
+        usingServiceClient: !!serviceClient
+      });
+      
+      // Upload encrypted file to Supabase Storage
+      const storageClient = serviceClient || supabase;
+      const { error: uploadError } = await storageClient
+        .storage
+        .from(vault.storage_bucket)
+        .upload(encryptedFilename, Buffer.from(encryptedData, 'hex'), {
+          contentType: 'application/octet-stream', // Use generic type for encrypted data
+          cacheControl: 'private, max-age=0', // No caching for secure files
+        });
+        
+      if (uploadError) {
+        console.error('File upload to Supabase Storage failed:', uploadError);
+        console.error('Error details:', {
+          bucket: vault.storage_bucket,
+          path: encryptedFilename,
+          message: uploadError.message,
+          code: uploadError.code,
+          statusCode: uploadError.statusCode,
+          details: uploadError.details,
+          usingServiceClient: !!serviceClient
+        });
+        throw new Error('Failed to upload encrypted file to storage: ' + uploadError.message);
+      }
+      
+      // Get the file URL (will be needed for retrieval)
+      const { data: fileUrlData } = await storageClient
+        .storage
+        .from(vault.storage_bucket)
+        .getPublicUrl(encryptedFilename);
+        
+      const filePath = fileUrlData?.publicUrl || '';
+      
       // Store file details in database
-      await db.query(
-        `INSERT INTO fileTable (
-          file_id, file_name, file_type, file_size, 
-          vault_id, file_path, iv, encryption_type
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-        [
-          fileId,
-          file.originalname,
-          path.extname(file.originalname).slice(1),
-          file.size,
-          vault_id,
-          encryptedFilePath,
-          iv,
-          use_vault_key ? 'vault' : 'custom'
-        ]
-      );
+      const { data: fileData, error: fileInsertError } = await supabase
+        .from('files')
+        .insert({
+          file_id: fileId,
+          file_name: file.originalname,
+          file_type: path.extname(file.originalname).slice(1),
+          file_size: file.size,
+          vault_id: vault_id,
+          file_path: filePath,
+          iv: iv,
+          encryption_type: use_vault_key ? 'vault' : 'custom',
+          storage_path: encryptedFilename,
+          storage_bucket: vault.storage_bucket
+        })
+        .select()
+        .single();
+        
+      if (fileInsertError) {
+        console.error('Error inserting file record:', fileInsertError);
+        throw new Error('Failed to record file in database');
+      }
 
       // Store encryption key
       const hashedKey = await hashEncryptionKey(encryption_key);
-      await db.query(
-        `INSERT INTO fileEncryptionKeys (key_id, file_id, hashed_key) 
-         VALUES ($1, $2, $3)`,
-        [keyId, fileId, hashedKey]
-      );
+      const { error: keyInsertError } = await supabase
+        .from('file_encryption_keys')
+        .insert({
+          key_id: keyId,
+          file_id: fileId,
+          hashed_key: hashedKey
+        });
+        
+      if (keyInsertError) {
+        console.error('Error inserting encryption key:', keyInsertError);
+        throw new Error('Failed to store encryption key');
+      }
 
       // Log the activity
       await logActivity(
@@ -586,6 +823,18 @@ router.post('/file/upload', upload.single('file'), async (req, res) => {
     }
   } catch (error) {
     console.error('Upload error:', error);
+    console.error('Error stack:', error.stack);
+    
+    // Check if it's a Supabase error with more details
+    if (error.statusCode || error.code) {
+      console.error('Supabase error details:', {
+        code: error.code,
+        statusCode: error.statusCode,
+        message: error.message,
+        details: error.details || 'No additional details'
+      });
+    }
+    
     res.status(500).json({ 
       error: 'Failed to upload file',
       details: error.message
@@ -593,7 +842,7 @@ router.post('/file/upload', upload.single('file'), async (req, res) => {
   }
 });
 
-// Update the file decrypt route
+// file decrypt route
 router.post('/file/decrypt', async (req, res) => {
   const { file_id, decryption_key, user_id } = req.body;
 
@@ -603,30 +852,58 @@ router.post('/file/decrypt', async (req, res) => {
       return res.status(400).json({ error: 'User ID is required' });
     }
 
-    // Get file and encryption details
-    const fileQuery = await db.query(
-      'SELECT f.*, k.hashed_key, v.vault_name FROM fileTable f JOIN fileEncryptionKeys k ON f.file_id = k.file_id JOIN vaultTable v ON f.vault_id = v.vault_id WHERE f.file_id = $1',
-      [file_id]
-    );
+    // Get file and encryption details from Supabase
+    const { data: file, error: fileError } = await supabase
+      .from('files')
+      .select(`
+        *,
+        vaults:vault_id(vault_name),
+        encryption_keys:file_id(hashed_key)
+      `)
+      .eq('file_id', file_id)
+      .single();
 
-    if (fileQuery.rows.length === 0) {
+    if (fileError || !file) {
+      console.error('File retrieval error:', fileError);
       return res.status(404).json({ error: 'File not found' });
     }
+    
+    // Ensure the user has permission to access this file
+    const { data: vaultAccess, error: accessError } = await supabase
+      .from('vaults')
+      .select('vault_id')
+      .eq('vault_id', file.vault_id)
+      .eq('user_id', user_id)
+      .single();
+      
+    if (accessError || !vaultAccess) {
+      console.error('Access check error:', accessError);
+      return res.status(403).json({ error: 'You do not have permission to access this file' });
+    }
 
-    const file = fileQuery.rows[0];
+    // Download the encrypted file from Supabase Storage
+    const { data: encryptedFileData, error: downloadError } = await supabase
+      .storage
+      .from(file.storage_bucket)
+      .download(file.storage_path);
 
-    // Read the encrypted file
-    const encryptedData = fs.readFileSync(file.file_path, 'hex');
+    if (downloadError || !encryptedFileData) {
+      console.error('Error downloading encrypted file:', downloadError);
+      return res.status(500).json({ error: 'Failed to retrieve encrypted file' });
+    }
+
+    // Convert Blob to hex string for decryption
+    const encryptedDataHex = await blobToHexString(encryptedFileData);
     
     try {
       // Decrypt the file
-      const decryptedData = decryptFile(encryptedData, decryption_key, file.iv);
+      const decryptedData = decryptFile(encryptedDataHex, decryption_key, file.iv);
       
-      // Log successful decryption BEFORE sending response
+      // Log successful decryption
       await logActivity(
         user_id,
         'FILE_DECRYPT',
-        `Decrypted file: ${file.file_name} from vault: ${file.vault_name}`,
+        `Decrypted file: ${file.file_name} from vault: ${file.vaults.vault_name}`,
         file.vault_id,
         file_id,
         req
@@ -638,13 +915,13 @@ router.post('/file/decrypt', async (req, res) => {
         return res.json({ content: textContent });
       }
 
-      // For Office documents and other files
+      // For other files
       const contentType = getContentType(file.file_type);
       res.setHeader('Content-Type', contentType);
       res.setHeader('Content-Disposition', `inline; filename="${file.file_name}"`);
       
-      // Send decrypted data as buffer
-      res.send(Buffer.from(decryptedData));
+      // Send the decrypted file
+      return res.send(Buffer.from(decryptedData));
     } catch (decryptError) {
       console.error('Decryption failed:', decryptError);
       return res.status(400).json({ error: 'Invalid decryption key' });
@@ -654,6 +931,68 @@ router.post('/file/decrypt', async (req, res) => {
     res.status(500).json({ error: 'Failed to decrypt file' });
   }
 });
+
+// Helper function to determine the correct content type for files
+function getContentType(fileType) {
+  // Standardize fileType by removing any dots and converting to lowercase
+  const type = fileType.toLowerCase().replace(/^\./, '');
+  
+  // Common MIME types mapping
+  const mimeTypes = {
+    // Text formats
+    'txt': 'text/plain',
+    'html': 'text/html',
+    'css': 'text/css',
+    'csv': 'text/csv',
+    
+    // Image formats
+    'jpg': 'image/jpeg',
+    'jpeg': 'image/jpeg',
+    'png': 'image/png',
+    'gif': 'image/gif',
+    'svg': 'image/svg+xml',
+    'webp': 'image/webp',
+    
+    // Document formats
+    'pdf': 'application/pdf',
+    'doc': 'application/msword',
+    'docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    'xls': 'application/vnd.ms-excel',
+    'xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    'ppt': 'application/vnd.ms-powerpoint',
+    'pptx': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+    
+    // Archive formats
+    'zip': 'application/zip',
+    'rar': 'application/x-rar-compressed',
+    '7z': 'application/x-7z-compressed',
+    'tar': 'application/x-tar',
+    
+    // Audio formats
+    'mp3': 'audio/mpeg',
+    'wav': 'audio/wav',
+    'ogg': 'audio/ogg',
+    
+    // Video formats
+    'mp4': 'video/mp4',
+    'webm': 'video/webm',
+    'avi': 'video/x-msvideo',
+    
+    // Other common formats
+    'json': 'application/json',
+    'xml': 'application/xml',
+    'js': 'application/javascript',
+  };
+  
+  // Return the appropriate MIME type or a default type if not found
+  return mimeTypes[type] || 'application/octet-stream';
+}
+
+// Helper function to convert Blob to hex string
+async function blobToHexString(blob) {
+  const buffer = await blob.arrayBuffer();
+  return Buffer.from(buffer).toString('hex');
+}
 
 // function to verify encryption key
 async function verifyEncryptionKey(providedKey, hashedKey) {
@@ -672,7 +1011,7 @@ async function hashEncryptionKey(key) {
   return await bcrypt.hash(key, saltRounds);
 }
 
-// Update the files fetch route
+// files fetch route
 router.get('/files/:vaultId', async (req, res) => {
   const { vaultId } = req.params;
 
@@ -877,578 +1216,135 @@ router.get('/files/raw-preview/:fileId', async (req, res) => {
       return res.status(400).json({ error: 'Invalid decryption key' });
     }
   } catch (err) {
-    console.error('Preview error:', err);
-    res.status(500).json({ error: 'Failed to preview file' });
+    console.error('File decryption error:', err);
+    res.status(500).json({ error: 'Failed to decrypt file' });
   }
 });
 
-// function to determine content type
-function getContentType(fileType) {
-  const contentTypes = {
-    // Images
-    'pdf': 'application/pdf',
-    'jpg': 'image/jpeg',
-    'jpeg': 'image/jpeg',
-    'png': 'image/png',
-    'gif': 'image/gif',
-    // Documents
-    'doc': 'application/msword',
-    'docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-    'txt': 'text/plain',
-    // Spreadsheets
-    'xls': 'application/vnd.ms-excel',
-    'xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-    // Presentations
-    'ppt': 'application/vnd.ms-powerpoint',
-    'pptx': 'application/vnd.openxmlformats-officedocument.presentationml.presentation'
-  };
-  return contentTypes[fileType.toLowerCase()] || 'application/octet-stream';
-}
-
-// File download route
-router.get('/files/download/:fileId', async (req, res) => {
-  const { fileId } = req.params;
-  const { decryption_key, userId } = req.query;
-
+// Diagnostic route for checking storage access
+router.get('/diagnostics/storage', async (req, res) => {
   try {
-    if (!userId) {
-      return res.status(400).json({ error: 'User ID is required' });
-    }
-
-    const fileQuery = await db.query(
-      'SELECT f.*, v.vault_name FROM fileTable f JOIN vaultTable v ON f.vault_id = v.vault_id WHERE file_id = $1',
-      [fileId]
-    );
-
-    if (fileQuery.rows.length === 0) {
-      return res.status(404).json({ error: 'File not found' });
-    }
-
-    const file = fileQuery.rows[0];
-
-    // Read the encrypted file
-    const encryptedData = fs.readFileSync(file.file_path, 'hex');
-    
-    try {
-      // Decrypt the file
-      const decryptedData = decryptFile(encryptedData, decryption_key, file.iv);
+    // Get available buckets
+    const { data: buckets, error: bucketError } = await supabase
+      .storage
+      .listBuckets();
       
-      // Log file download BEFORE sending the file
-      await logActivity(
-        userId,
-        'FILE_DOWNLOAD',
-        `Downloaded file: ${file.file_name} from vault: ${file.vault_name}`,
-        file.vault_id,
-        fileId,
-        req
-      );
-      
-      // Set headers for download
-      res.setHeader('Content-Type', getContentType(file.file_type));
-      res.setHeader('Content-Disposition', `attachment; filename="${file.file_name}"`);
-      
-      // Send the decrypted file
-      res.send(Buffer.from(decryptedData));
-    } catch (decryptError) {
-      console.error('Decryption failed:', decryptError);
-      return res.status(400).json({ error: 'Invalid decryption key' });
-    }
-  } catch (err) {
-    console.error('Download error:', err);
-    res.status(500).json({ error: 'Failed to download file' });
-  }
-});
-
-// Delete file route
-router.delete('/files/:fileId', async (req, res) => {
-  const { fileId } = req.params;
-  const { userId } = req.body;
-
-  try {
-    if (!userId) {
-      return res.status(400).json({ error: 'User ID is required' });
-    }
-
-    // Get file details first
-    const fileQuery = await db.query(
-      'SELECT f.*, v.vault_name FROM fileTable f JOIN vaultTable v ON f.vault_id = v.vault_id WHERE file_id = $1',
-      [fileId]
-    );
-
-    if (fileQuery.rows.length === 0) {
-      return res.status(404).json({ error: 'File not found' });
-    }
-
-    const file = fileQuery.rows[0];
-
-    // Log file deletion before actually deleting
-    await logActivity(
-      userId,
-      'FILE_DELETE',
-      `Deleted file: ${file.file_name} from vault: ${file.vault_name}`,
-      file.vault_id,
-      fileId,
-      req
-    );
-
-    // Delete the file from storage
-    if (fs.existsSync(file.file_path)) {
-      fs.unlinkSync(file.file_path);
-    }
-
-    // Delete from database (cascade will handle fileEncryptionKeys deletion)
-    await db.query('DELETE FROM fileTable WHERE file_id = $1', [fileId]);
-
-    res.json({ message: 'File deleted successfully' });
-  } catch (err) {
-    console.error('Error deleting file:', err);
-    res.status(500).json({ error: 'Failed to delete file' });
-  }
-});
-
-// Change password route
-router.post('/auth/change-password', async (req, res) => {
-  const { email, currentPassword, newPassword, userId } = req.body;
-  
-  try {
-    console.log('Password change attempt for:', { email, userId });
-
-    // Input validation
-    if (!email || !currentPassword || !newPassword || !userId) {
-      console.log('Missing required fields:', { 
-        hasEmail: !!email, 
-        hasCurrentPassword: !!currentPassword, 
-        hasNewPassword: !!newPassword, 
-        hasUserId: !!userId 
+    if (bucketError) {
+      return res.status(500).json({
+        error: 'Failed to list buckets',
+        details: bucketError
       });
-      return res.status(400).json({ error: 'All fields are required' });
     }
-
-    // Check if the user exists and verify it's the correct user
-    const userQuery = await db.query(
-      'SELECT * FROM userRegistration WHERE email = $1 AND user_id = $2',
-      [email, userId]
-    );
     
-    if (userQuery.rows.length === 0) {
-      console.log('User not found for:', { email, userId });
-      return res.status(400).json({ error: 'User not found or unauthorized' });
-    }
-
-    const user = userQuery.rows[0];
-
-    // Verify current password
-    const isPasswordValid = await bcrypt.compare(currentPassword, user.password);
-    if (!isPasswordValid) {
-      console.log('Invalid current password for user:', { email, userId });
-      return res.status(401).json({ error: 'Current password is incorrect' });
-    }
-
-    // Hash the new password
-    const saltRounds = 10;
-    const hashedNewPassword = await bcrypt.hash(newPassword, saltRounds);
-
-    // Update the password and password_change timestamp in the database
-    const now = new Date().toISOString();
-    const updateResult = await db.query(
-      'UPDATE userRegistration SET password = $1, password_change = $2 WHERE user_id = $3 RETURNING password_change',
-      [hashedNewPassword, now, userId]
-    );
-
-    // Log the activity
-    await logActivity(
-      userId,
-      'PASSWORD_CHANGE',
-      'Password changed successfully',
-      null,
-      null,
-      req
-    );
-
-    console.log('Password changed successfully for user:', { email, userId });
-    res.status(200).json({ 
-      message: 'Password changed successfully',
-      passwordChangeDate: updateResult.rows[0].password_change
-    });
-  } catch (err) {
-    console.error('Password change error:', err.message);
-    res.status(500).json({ error: 'Server error', details: err.message });
-  }
-});
-
-// Change vault key route
-router.post('/vaults/:vaultId/change-key', async (req, res) => {
-  const { vaultId } = req.params;
-  const { currentKey, newKey, userId } = req.body;
-
-  try {
-    // Input validation
-    if (!currentKey || !newKey || !userId) {
-      return res.status(400).json({ error: 'All fields are required' });
-    }
-
-    // Get vault details
-    const vaultQuery = await db.query(
-      'SELECT * FROM vaultTable WHERE vault_id = $1',
-      [vaultId]
-    );
-
-    if (vaultQuery.rows.length === 0) {
-      return res.status(404).json({ error: 'Vault not found' });
-    }
-
-    const vault = vaultQuery.rows[0];
-
-    // Verify user ownership
-    if (vault.user_id !== userId) {
-      return res.status(403).json({ error: 'Unauthorized access' });
-    }
-
-    // Verify current vault key
-    const isKeyValid = await bcrypt.compare(currentKey, vault.vault_key);
-    if (!isKeyValid) {
-      return res.status(401).json({ error: 'Current vault key is incorrect' });
-    }
-
-    // Start a transaction for updating vault key and re-encrypting files
-    await db.query('BEGIN');
-
-    try {
-      // Hash the new vault key
-      const saltRounds = 10;
-      const hashedNewKey = await bcrypt.hash(newKey, saltRounds);
-
-      // Update the vault key in the database
-      await db.query(
-        'UPDATE vaultTable SET vault_key = $1 WHERE vault_id = $2',
-        [hashedNewKey, vaultId]
-      );
-
-      // Get all files encrypted with vault key
-      const filesQuery = await db.query(
-        `SELECT f.*, k.key_id, k.hashed_key 
-         FROM fileTable f 
-         JOIN fileEncryptionKeys k ON f.file_id = k.file_id 
-         WHERE f.vault_id = $1 AND f.encryption_type = 'vault'`,
-        [vaultId]
-      );
-
-      // Re-encrypt each file with the new vault key
-      for (const file of filesQuery.rows) {
+    // Check each bucket for permissions
+    const bucketDetails = await Promise.all(
+      buckets.map(async (bucket) => {
         try {
-          // Read the encrypted file
-          const encryptedData = fs.readFileSync(file.file_path, 'hex');
-          
-          // Decrypt with old key
-          const decryptedData = decryptFile(encryptedData, currentKey, file.iv);
-          
-          // Re-encrypt with new key
-          const { iv: newIv, encryptedData: newEncryptedData } = encryptFile(decryptedData, newKey);
-          
-          // Save the re-encrypted file
-          fs.writeFileSync(file.file_path, newEncryptedData, 'hex');
-          
-          // Update the IV in fileTable
-          await db.query(
-            'UPDATE fileTable SET iv = $1 WHERE file_id = $2',
-            [newIv, file.file_id]
-          );
-          
-          // Update the hashed key in fileEncryptionKeys
-          const hashedFileKey = await hashEncryptionKey(newKey);
-          await db.query(
-            'UPDATE fileEncryptionKeys SET hashed_key = $1 WHERE key_id = $2',
-            [hashedFileKey, file.key_id]
-          );
-        } catch (encryptError) {
-          console.error(`Error re-encrypting file ${file.file_name}:`, encryptError);
-          throw new Error(`Failed to re-encrypt file ${file.file_name}`);
+          // Try to list files in bucket root
+          const { data: files, error: listError } = await supabase
+            .storage
+            .from(bucket.name)
+            .list();
+            
+          return {
+            name: bucket.name,
+            id: bucket.id,
+            public: bucket.public,
+            canList: !listError,
+            listError: listError ? listError.message : null,
+            fileCount: files ? files.length : null
+          };
+        } catch (err) {
+          return {
+            name: bucket.name,
+            id: bucket.id,
+            public: bucket.public,
+            error: err.message
+          };
         }
-      }
-
-      // Log the vault key change
-      await logActivity(
-        userId,
-        'VAULT_KEY_CHANGE',
-        `Changed encryption key for vault: ${vault.vault_name}`,
-        vaultId,
-        null,
-        req
-      );
-
-      // Commit the transaction
-      await db.query('COMMIT');
-
-      res.status(200).json({ 
-        message: 'Vault key changed successfully'
-      });
-    } catch (err) {
-      // Rollback the transaction on error
-      await db.query('ROLLBACK');
-      throw err;
-    }
-  } catch (err) {
-    console.error('Vault key change error:', err);
-    res.status(500).json({ 
-      error: 'Failed to change vault key', 
-      details: err.message 
+      })
+    );
+    
+    res.json({
+      status: 'success',
+      buckets: bucketDetails
     });
-  }
-});
-
-// Get files for a user
-router.get('/files/user/:userId', async (req, res) => {
-  const { userId } = req.params;
-
-  try {
-    // Check if the user exists
-    const userQuery = await db.query('SELECT * FROM userRegistration WHERE user_id = $1', [userId]);
-    if (userQuery.rows.length === 0) {
-      return res.status(404).json({ error: 'User not found' });
-    }
-
-    // Get all files for the user across all vaults
-    const filesQuery = await db.query(
-      `SELECT 
-        f.file_id as "fileId",
-        f.file_name as "fileName",
-        f.file_type as "fileType",
-        f.file_size as "fileSize",
-        f.encryption_type as "encryptionType",
-        f.created_at as "createdAt",
-        v.vault_name as "vaultName"
-      FROM fileTable f
-      JOIN vaultTable v ON f.vault_id = v.vault_id
-      WHERE v.user_id = $1
-      ORDER BY f.created_at DESC`,
-      [userId]
-    );
-
-    res.json({ files: filesQuery.rows });
   } catch (err) {
-    console.error('Error fetching user files:', err);
-    res.status(500).json({ error: 'Server error' });
-  }
-});
-
-// Change file encryption key
-router.post('/files/:fileId/change-key', async (req, res) => {
-  const { fileId } = req.params;
-  const { currentKey, newKey, userId } = req.body;
-
-  console.log('Starting file key change process:', { fileId });
-
-  try {
-    // Input validation with detailed error messages
-    if (!currentKey) {
-      return res.status(400).json({ error: 'Current key is required' });
-    }
-    if (!newKey) {
-      return res.status(400).json({ error: 'New key is required' });
-    }
-    if (!userId) {
-      return res.status(400).json({ error: 'User ID is required' });
-    }
-
-    // Get file details and verify ownership
-    const fileQuery = await db.query(
-      `SELECT 
-        f.*,
-        k.key_id,
-        k.hashed_key,
-        v.user_id,
-        v.vault_name,
-        v.vault_key
-      FROM fileTable f 
-      JOIN fileEncryptionKeys k ON f.file_id = k.file_id 
-      JOIN vaultTable v ON f.vault_id = v.vault_id 
-      WHERE f.file_id = $1`,
-      [fileId]
-    );
-
-    if (fileQuery.rows.length === 0) {
-      return res.status(404).json({ error: 'File not found' });
-    }
-
-    const file = fileQuery.rows[0];
-    console.log('File found:', { fileName: file.file_name, encryptionType: file.encryption_type });
-
-    // Verify user ownership
-    if (file.user_id !== userId) {
-      return res.status(403).json({ error: 'Unauthorized access' });
-    }
-
-    // Verify current key based on encryption type
-    let isKeyValid = false;
-    let decryptionKey = currentKey;
-
-    try {
-      if (file.encryption_type === 'vault') {
-        // For vault-encrypted files, verify against vault key
-        isKeyValid = await bcrypt.compare(currentKey, file.vault_key);
-        if (!isKeyValid) {
-          return res.status(401).json({ error: 'Current vault key is incorrect' });
-        }
-        // Use the actual vault key for decryption
-        decryptionKey = currentKey;
-      } else {
-        // For custom-encrypted files, verify against file's hashed key
-        isKeyValid = await verifyEncryptionKey(currentKey, file.hashed_key);
-        if (!isKeyValid) {
-          return res.status(401).json({ error: 'Current encryption key is incorrect' });
-        }
-        decryptionKey = currentKey;
-      }
-    } catch (verifyError) {
-      console.error('Key verification error:', verifyError);
-      return res.status(400).json({ error: 'Failed to verify encryption key' });
-    }
-
-    // Start transaction
-    await db.query('BEGIN');
-
-    try {
-      // Check if file exists on disk
-      if (!fs.existsSync(file.file_path)) {
-        throw new Error('Encrypted file not found on disk');
-      }
-
-      // Read and decrypt file
-      const encryptedData = fs.readFileSync(file.file_path, 'hex');
-      let decryptedData;
-      try {
-        console.log('Attempting decryption with key type:', file.encryption_type);
-        decryptedData = decryptFile(encryptedData, decryptionKey, file.iv);
-        if (!decryptedData) {
-          throw new Error('Decryption resulted in null or undefined data');
-        }
-      } catch (decryptError) {
-        console.error('Decryption error:', decryptError);
-        throw new Error('Failed to decrypt file with current key');
-      }
-
-      // Re-encrypt with new key
-      let newIv, newEncryptedData;
-      try {
-        const result = encryptFile(Buffer.from(decryptedData), newKey);
-        newIv = result.iv;
-        newEncryptedData = result.encryptedData;
-        if (!newEncryptedData || !newIv) {
-          throw new Error('Encryption resulted in invalid data');
-        }
-      } catch (encryptError) {
-        console.error('Encryption error:', encryptError);
-        throw new Error('Failed to re-encrypt file with new key');
-      }
-
-      // Save re-encrypted file
-      try {
-        fs.writeFileSync(file.file_path, newEncryptedData, 'hex');
-      } catch (writeError) {
-        console.error('File write error:', writeError);
-        throw new Error('Failed to save re-encrypted file');
-      }
-
-      // Update database records
-      try {
-        // Update file table
-        await db.query(
-          'UPDATE fileTable SET iv = $1, encryption_type = $2 WHERE file_id = $3',
-          [newIv, 'custom', fileId]
-        );
-
-        // Update encryption keys
-        const hashedNewKey = await hashEncryptionKey(newKey);
-        await db.query(
-          'UPDATE fileEncryptionKeys SET hashed_key = $1 WHERE key_id = $2',
-          [hashedNewKey, file.key_id]
-        );
-      } catch (dbError) {
-        console.error('Database update error:', dbError);
-        throw new Error('Failed to update database records');
-      }
-
-      // Log activity
-      await logActivity(
-        userId,
-        'FILE_KEY_CHANGE',
-        `Changed encryption key for file: ${file.file_name} in vault: ${file.vault_name}`,
-        file.vault_id,
-        fileId,
-        req
-      );
-
-      // Commit transaction
-      await db.query('COMMIT');
-
-      console.log('File key change completed successfully');
-      res.json({ 
-        message: 'File encryption key changed successfully',
-        file: {
-          fileId: file.file_id,
-          fileName: file.file_name,
-          encryptionType: 'custom'
-        }
-      });
-    } catch (error) {
-      console.error('Transaction error:', error);
-      await db.query('ROLLBACK');
-      throw error;
-    }
-  } catch (err) {
-    console.error('File key change error:', err);
-    // Ensure transaction is rolled back
-    try {
-      await db.query('ROLLBACK');
-    } catch (rollbackErr) {
-      console.error('Rollback error:', rollbackErr);
-    }
-    res.status(500).json({ 
-      error: 'Failed to change file encryption key',
+    console.error('Storage diagnostics error:', err);
+    res.status(500).json({
+      error: 'Diagnostics failed',
       details: err.message
     });
   }
 });
 
-// Activity log routes
-router.get('/activities/:userId', async (req, res) => {
+// Test route for Supabase storage permissions
+router.get('/test-storage-upload', async (req, res) => {
+  try {
+    const testContent = Buffer.from('This is a test file');
+    const testPath = 'test-upload.txt';
+    
+    // First try with regular client
     try {
-        const { userId } = req.params;
-        const page = parseInt(req.query.page) || 1;
-        const limit = parseInt(req.query.limit) || 10;
-
-        const result = await getActivities(userId, page, limit);
-        res.json(result);
-    } catch (error) {
-        console.error('Error fetching activities:', error);
-        res.status(500).json({ error: 'Failed to fetch activities' });
+      const { data: regularData, error: regularError } = await supabase
+        .storage
+        .from('securefiles')
+        .upload(testPath, testContent, { upsert: true });
+        
+      if (regularError) {
+        console.log('Regular client upload failed:', regularError);
+      } else {
+        console.log('Regular client upload succeeded:', regularData);
+        
+        // Clean up
+        await supabase.storage.from('securefiles').remove([testPath]);
+        return res.json({ success: true, client: 'regular' });
+      }
+    } catch (err) {
+      console.error('Regular client error:', err);
     }
+    
+    // Test with service role if available
+    if (serviceClient) {
+      try {
+        const { data: serviceData, error: serviceError } = await serviceClient
+          .storage
+          .from('securefiles')
+          .upload(testPath, testContent, { upsert: true });
+          
+        if (serviceError) {
+          console.log('Service client upload failed:', serviceError);
+          return res.status(500).json({
+            success: false,
+            error: serviceError,
+            message: 'Both regular and service client uploads failed'
+          });
+        } else {
+          console.log('Service client upload succeeded:', serviceData);
+          
+          // Clean up
+          await serviceClient.storage.from('securefiles').remove([testPath]);
+          return res.json({ success: true, client: 'service' });
+        }
+      } catch (err) {
+        console.error('Service client error:', err);
+        return res.status(500).json({
+          success: false,
+          error: err.message,
+          message: 'Both clients failed with errors'
+        });
+      }
+    } else {
+      return res.status(500).json({
+        success: false,
+        message: 'No service client available - make sure SUPABASE_SERVICE_ROLE_KEY is set in .env'
+      });
+    }
+  } catch (err) {
+    console.error('Test upload error:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
 });
 
-// route for logging activities
-router.post('/activities', async (req, res) => {
-    try {
-        const { userId, actionType, details, vaultId, fileId } = req.body;
-        const result = await logActivity(userId, actionType, details, vaultId, fileId, req);
-        res.json(result);
-    } catch (error) {
-        console.error('Error logging activity:', error);
-        res.status(500).json({ error: 'Failed to log activity' });
-    }
-});
-
-// route for searching activities
-router.post('/activities/search/:userId', async (req, res) => {
-    try {
-        const { userId } = req.params;
-        const { searchTerm, filters } = req.body;
-
-        const result = await searchActivities(userId, searchTerm, filters);
-        res.json(result);
-    } catch (error) {
-        console.error('Error searching activities:', error);
-        res.status(500).json({ error: 'Failed to search activities' });
-    }
-});
-
+// Export the router
 export default router; 
