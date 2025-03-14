@@ -1,0 +1,41 @@
+.status-encrypted {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 8px;
+  border-radius: 9999px;
+  background-color: #d1fae5;
+  color: #065f46;
+  font-size: 0.75rem;
+  font-weight: 500;
+}
+
+.status-unencrypted {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 8px;
+  border-radius: 9999px;
+  background-color: #fef3c7;
+  color: #92400e;
+  font-size: 0.75rem;
+  font-weight: 500;
+}
+
+.table-actions button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+}
+
+.container {
+  max-width: 800px;
+  margin: 0 auto;
+}
+
+header h1 {
+  color: #1f2937;
+}
+
+.text-muted-foreground {
+  color: #6b7280;
+}

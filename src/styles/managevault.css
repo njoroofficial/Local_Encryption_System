@@ -1,0 +1,58 @@
+/* src/styles/ManageVault.css */
+
+.vault-container {
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 2rem;
+}
+
+.vault-header {
+    margin-bottom: 2rem;
+}
+
+.vault-overview {
+    margin-bottom: 2rem;
+}
+
+.vault-actions {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 1rem;
+}
+
+/* Override Material-UI styles */
+.MuiTableCell-root {
+    border-bottom: 1px solid #f3f4f6 !important;
+    padding: 1rem 1.5rem !important;
+}
+
+.MuiTableHead-root .MuiTableCell-root {
+    color: #6b7280 !important;
+    font-weight: 500 !important;
+    font-size: 0.875rem !important;
+}
+
+.MuiTableBody-root .MuiTableCell-root {
+    color: #000 !important;
+    font-size: 0.875rem !important;
+}
+
+.MuiIconButton-root {
+    padding: 6px !important;
+}
+
+.MuiIconButton-root:hover {
+    background-color: #f3f4f6 !important;
+}
+
+.MuiIconButton-root:hover .MuiSvgIcon-root {
+    color: #000 !important;
+}
+
+@media (max-width: 768px) {
+    .vault-container {
+        padding: 1rem;
+    }
+}
+  

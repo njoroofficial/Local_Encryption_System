@@ -1,0 +1,445 @@
+/* src/styles/securityCenter.css */
+
+.security-container {
+    max-width: 800px;
+    margin: 0 auto;
+    margin-top: 50px;
+    padding: 20px;
+  }
+  
+  .security-card {
+    background: #fff;
+    padding: 20px;
+    border-radius: 10px;
+    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+  }
+  
+  .security-title {
+    font-size: 24px;
+    font-weight: bold;
+    margin-bottom: 5px;
+  }
+  
+  .security-description {
+    font-size: 16px;
+    color: #666;
+    margin-bottom: 20px;
+  }
+  
+  .security-section {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 15px 0;
+    border-bottom: 1px solid #ddd;
+  }
+  
+  .security-info h3 {
+    font-size: 18px;
+    margin-bottom: 3px;
+  }
+  
+  .security-info p {
+    font-size: 14px;
+    color: #666;
+  }
+  
+  .security-alert {
+    display: flex;
+    align-items: center;
+    background: #eef4ff;
+    padding: 10px;
+    border-radius: 5px;
+    margin-top: 20px;
+  }
+  
+  .security-alert .icon {
+    margin-right: 10px;
+    color: #007bff;
+  }
+  
+  .security-activity {
+    margin-top: 20px;
+  }
+  
+  .security-activity h3 {
+    font-size: 18px;
+    margin-bottom: 10px;
+  }
+  
+  .security-activity ul {
+    list-style-type: none;
+    padding: 0;
+  }
+  
+  .security-activity li {
+    padding: 5px 0;
+    font-size: 14px;
+    color: #333;
+  }
+  
+  .security-actions {
+    margin-top: 20px;
+  }
+  
+  .security-button {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 100%;
+    padding: 10px;
+    background: #007bff;
+    color: #fff;
+    border: none;
+    border-radius: 5px;
+    margin-bottom: 10px;
+    cursor: pointer;
+  }
+  
+  .security-button.danger {
+    background: #dc3545;
+  }
+  
+  .security-button .icon {
+    margin-right: 8px;
+  }
+  
+  .modal-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background-color: rgba(0, 0, 0, 0.5);
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    z-index: 1000;
+  }
+  
+  .modal-content {
+    background: white;
+    padding: 2rem;
+    border-radius: 8px;
+    width: 100%;
+    max-width: 400px;
+    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+  }
+  
+  .modal-content h2 {
+    margin-bottom: 1.5rem;
+    font-size: 1.5rem;
+    color: #333;
+  }
+  
+  .password-input {
+    position: relative;
+    display: flex;
+    align-items: center;
+  }
+  
+  .password-input input {
+    width: 100%;
+    padding: 0.75rem;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    font-size: 1rem;
+    padding-right: 40px;
+  }
+  
+  .toggle-visibility {
+    position: absolute;
+    right: 10px;
+    background: none;
+    border: none;
+    cursor: pointer;
+    color: #666;
+    display: flex;
+    align-items: center;
+  }
+  
+  .toggle-visibility:hover {
+    color: #333;
+  }
+  
+  .modal-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 1rem;
+    margin-top: 2rem;
+  }
+  
+  .cancel-button,
+  .submit-button {
+    padding: 0.75rem 1.5rem;
+    border-radius: 4px;
+    font-size: 1rem;
+    cursor: pointer;
+    transition: background-color 0.2s;
+  }
+  
+  .cancel-button {
+    background-color: #f5f5f5;
+    border: 1px solid #ddd;
+    color: #666;
+  }
+  
+  .cancel-button:hover {
+    background-color: #eee;
+  }
+  
+  .submit-button {
+    background-color: #000;
+    border: none;
+    color: white;
+  }
+  
+  .submit-button:hover {
+    background-color: #333;
+  }
+  
+  .submit-button:disabled,
+  .cancel-button:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+  }
+  
+  .error-message {
+    color: #dc3545;
+    margin-top: 1rem;
+    font-size: 0.9rem;
+  }
+  
+  .success-message {
+    color: #28a745;
+    margin-top: 1rem;
+    font-size: 0.9rem;
+  }
+  
+  .input-group {
+    margin-bottom: 1.5rem;
+  }
+  
+  .input-group label {
+    display: block;
+    margin-bottom: 0.5rem;
+    color: #333;
+    font-size: 0.9rem;
+  }
+  
+  .vaults-list {
+    margin-bottom: 2rem;
+  }
+  
+  .vault-items {
+    list-style: none;
+    padding: 0;
+    margin: 1rem 0;
+  }
+  
+  .vault-item {
+    padding: 0.75rem 1rem;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    margin-bottom: 0.5rem;
+    cursor: pointer;
+    transition: all 0.2s;
+  }
+  
+  .vault-item:hover {
+    background-color: #f5f5f5;
+  }
+  
+  .vault-item.selected {
+    background-color: #000;
+    color: white;
+    border-color: #000;
+  }
+  
+  /* File Key Manager Styles */
+  .files-list {
+    margin-bottom: 2rem;
+    max-height: 400px;
+    overflow-y: auto;
+  }
+  
+  .file-items {
+    list-style: none;
+    padding: 0;
+    margin: 1rem 0;
+  }
+  
+  .file-item {
+    padding: 1rem;
+    border: 1px solid #e0e0e0;
+    border-radius: 4px;
+    margin-bottom: 0.5rem;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+  }
+  
+  .file-item:hover {
+    background-color: #f5f5f5;
+    border-color: #bdbdbd;
+  }
+  
+  .file-item.selected {
+    background-color: #e3f2fd;
+    border-color: #2196f3;
+  }
+  
+  .file-item .file-name {
+    display: block;
+    font-weight: 500;
+    margin-bottom: 0.25rem;
+    color: #333;
+  }
+  
+  .file-item .file-info {
+    display: block;
+    font-size: 0.875rem;
+    color: #757575;
+  }
+  
+  .file-item .file-vault {
+    font-size: 0.875rem;
+    color: #616161;
+    background-color: #f5f5f5;
+    padding: 0.25rem 0.5rem;
+    border-radius: 4px;
+  }
+  
+  .info-message {
+    background-color: #e3f2fd;
+    padding: 1.5rem;
+    border-radius: 4px;
+    margin: 1rem 0;
+    color: #1976d2;
+  }
+  
+  .info-message p {
+    margin: 0 0 1rem 0;
+  }
+  
+  .info-message p:last-child {
+    margin-bottom: 0.5rem;
+  }
+  
+  .info-message ul {
+    margin: 0.5rem 0;
+    padding-left: 1.5rem;
+  }
+  
+  .info-message li {
+    margin: 0.5rem 0;
+    color: #2196f3;
+  }
+  
+  .password-input {
+    position: relative;
+    display: flex;
+    align-items: center;
+  }
+  
+  .password-input input {
+    flex: 1;
+    padding-right: 40px;
+  }
+  
+  .toggle-visibility {
+    position: absolute;
+    right: 8px;
+    background: none;
+    border: none;
+    cursor: pointer;
+    color: #757575;
+    padding: 4px;
+  }
+  
+  .toggle-visibility:hover {
+    color: #424242;
+  }
+  
+  .error-message {
+    color: #d32f2f;
+    margin: 1rem 0;
+  }
+  
+  .success-message {
+    color: #2e7d32;
+    margin: 1rem 0;
+  }
+  
+  .modal-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 1rem;
+    margin-top: 2rem;
+  }
+  
+  .cancel-button {
+    padding: 0.5rem 1rem;
+    border: 1px solid #e0e0e0;
+    background-color: white;
+    border-radius: 4px;
+    cursor: pointer;
+  }
+  
+  .submit-button {
+    padding: 0.5rem 1rem;
+    background-color: #2196f3;
+    color: white;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+  }
+  
+  .submit-button:disabled,
+  .cancel-button:disabled {
+    opacity: 0.7;
+    cursor: not-allowed;
+  }
+  
+  .selected-file-info {
+    margin-bottom: 2rem;
+    padding-bottom: 1rem;
+    border-bottom: 1px solid #e0e0e0;
+  }
+  
+  .back-button {
+    background: none;
+    border: none;
+    color: #2196f3;
+    font-size: 0.9rem;
+    padding: 0.5rem 0;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    margin-bottom: 1rem;
+  }
+  
+  .back-button:hover {
+    color: #1976d2;
+    text-decoration: underline;
+  }
+  
+  .file-details {
+    margin-bottom: 1rem;
+  }
+  
+  .file-details h3 {
+    margin: 0 0 0.5rem 0;
+    color: #333;
+    font-size: 1.2rem;
+  }
+  
+  .file-meta {
+    color: #757575;
+    font-size: 0.9rem;
+    line-height: 1.5;
+    margin: 0;
+  }
+  

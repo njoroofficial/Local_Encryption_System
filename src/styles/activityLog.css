@@ -1,0 +1,180 @@
+.activity-log-container {
+    padding: 2rem;
+    max-width: 1200px;
+    margin: 0 auto;
+  }
+  
+  .activity-log-card {
+    background: #fff;
+    padding: 20px;
+    border-radius: 10px;
+    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+  }
+  
+  .activity-log-title {
+    font-size: 24px;
+    font-weight: bold;
+    margin-bottom: 5px;
+  }
+  
+  .activity-log-description {
+    font-size: 16px;
+    color: #666;
+    margin-bottom: 20px;
+  }
+  
+  .activity-log-controls {
+    display: flex;
+    gap: 10px;
+    margin-bottom: 20px;
+  }
+  
+  .activity-log-search {
+    flex: 1;
+    padding: 10px;
+    border: 1px solid #ddd;
+    border-radius: 5px;
+  }
+  
+  .activity-log-button {
+    display: flex;
+    align-items: center;
+    padding: 10px 15px;
+    background: #007bff;
+    color: #fff;
+    border: none;
+    border-radius: 5px;
+    cursor: pointer;
+  }
+  
+  .activity-log-button.outline {
+    background: #fff;
+    color: #007bff;
+    border: 1px solid #007bff;
+  }
+  
+  .icon {
+    margin-right: 5px;
+  }
+  
+  .activity-log-table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-top: 20px;
+  }
+  
+  .activity-log-table th,
+  .activity-log-table td {
+    padding: 10px;
+    border-bottom: 1px solid #ddd;
+    text-align: left;
+  }
+  
+  .activity-log-footer {
+    text-align: center;
+    margin-top: 20px;
+  }
+  
+  .activity-log-header {
+    margin-bottom: 2rem;
+  }
+  
+  .search-filter-container {
+    display: flex;
+    gap: 1rem;
+    margin-bottom: 1.5rem;
+    align-items: center;
+  }
+  
+  .search-field {
+    flex: 1;
+  }
+  
+  .button-group {
+    display: flex;
+    gap: 0.5rem;
+  }
+  
+  .search-button {
+    background-color: #1a1a1a !important;
+    color: white !important;
+  }
+  
+  .search-button:hover {
+    background-color: #333 !important;
+  }
+  
+  .filter-button {
+    border-color: #1a1a1a !important;
+    color: #1a1a1a !important;
+  }
+  
+  .activity-table {
+    margin-bottom: 1.5rem;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1) !important;
+  }
+  
+  .activity-table .MuiTableCell-head {
+    font-weight: 600;
+    background-color: #f5f5f5;
+  }
+  
+  .activity-table .MuiTableRow-root:hover {
+    background-color: #f8f9fa;
+  }
+  
+  .pagination-container {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    gap: 1rem;
+    margin-top: 1rem;
+  }
+  
+  .applied-filters {
+    display: flex;
+    gap: 0.5rem;
+    margin-bottom: 1rem;
+    flex-wrap: wrap;
+  }
+  
+  .filter-chip {
+    background-color: #e3f2fd !important;
+    color: #1976d2 !important;
+  }
+  
+  .filter-chip .MuiChip-deleteIcon {
+    color: #1976d2 !important;
+  }
+  
+  .error-message {
+    margin: 1rem 0;
+    padding: 0.75rem;
+    background-color: #ffebee;
+    border-radius: 4px;
+    color: #c62828;
+  }
+  
+  /* Loading state */
+  .activity-table .MuiCircularProgress-root {
+    margin: 2rem 0;
+  }
+  
+  /* Empty state */
+  .activity-table .MuiTableCell-root[colspan="3"] {
+    text-align: center;
+    padding: 2rem;
+    color: #666;
+  }
+  
+  /* Icon styles */
+  .MuiSvgIcon-root {
+    font-size: 1.2rem !important;
+    margin-right: 0.5rem;
+  }
+  
+  /* Table row hover effect */
+  .activity-table tr:hover {
+    background-color: #f8f8f8;
+  }
+  
