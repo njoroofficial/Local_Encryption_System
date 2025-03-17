@@ -25,15 +25,14 @@ const getOrCreateBucketReference = async (userId, vaultName) => {
   const bucketName = 'securefiles';
   
   try {
-    // Check if the standard bucket exists
+    // Check if the common bucket exists
     const { data: bucketInfo, error: checkError } = await supabase
       .storage
       .getBucket(bucketName);
       
     if (!bucketInfo) {
       console.log(`Common bucket '${bucketName}' doesn't exist yet. This is normal on first run.`);
-      // We won't try to create it here - the bucket should be created via Supabase dashboard
-      // by the administrator with appropriate policies
+      
       
       // Check if the bucket actually exists (case sensitive check)
       const { data: buckets, error: listError } = await supabase
@@ -169,6 +168,7 @@ router.post('/auth/signup',
           first_name,
           last_name
         `)
+        // check if the user id is the same as the auth user id
         .eq('id', authData.user.id)
         .single();
 
@@ -229,6 +229,7 @@ router.post('/auth/signin', async (req, res) => {
         first_name,
         last_name
       `)
+      // check if the user id is the same as the auth user id
       .eq('id', authData.user.id)
       .single();
 
@@ -266,6 +267,7 @@ router.post('/auth/signin', async (req, res) => {
     res.status(500).json({ error: 'Server error', details: err.message });
   }
 });
+
 // resend verification email route
 router.post('/auth/resend-verification', async (req, res) => {
   const { email } = req.body;
@@ -346,7 +348,9 @@ router.post('/vault/create',
           storage_bucket: bucketName,
           storage_path: folderPath  // Store the folder path within the bucket
         })
+        // select the new vault
         .select()
+        // return the new vault
         .single();
 
       if (vaultError) {
@@ -493,7 +497,7 @@ router.delete('/vaults/:vaultId', async (req, res) => {
         }
       }
       
-      // Note: We don't delete the bucket anymore since it's shared
+      // Note: The bucket will not be deleted since it's shared
     }
 
     // Delete all associated files records (the cascade will handle file_encryption_keys)
@@ -842,95 +846,6 @@ router.post('/file/upload', upload.single('file'), async (req, res) => {
   }
 });
 
-// file decrypt route
-router.post('/file/decrypt', async (req, res) => {
-  const { file_id, decryption_key, user_id } = req.body;
-
-  try {
-    // Validate user_id
-    if (!user_id) {
-      return res.status(400).json({ error: 'User ID is required' });
-    }
-
-    // Get file and encryption details from Supabase
-    const { data: file, error: fileError } = await supabase
-      .from('files')
-      .select(`
-        *,
-        vaults:vault_id(vault_name),
-        encryption_keys:file_id(hashed_key)
-      `)
-      .eq('file_id', file_id)
-      .single();
-
-    if (fileError || !file) {
-      console.error('File retrieval error:', fileError);
-      return res.status(404).json({ error: 'File not found' });
-    }
-    
-    // Ensure the user has permission to access this file
-    const { data: vaultAccess, error: accessError } = await supabase
-      .from('vaults')
-      .select('vault_id')
-      .eq('vault_id', file.vault_id)
-      .eq('user_id', user_id)
-      .single();
-      
-    if (accessError || !vaultAccess) {
-      console.error('Access check error:', accessError);
-      return res.status(403).json({ error: 'You do not have permission to access this file' });
-    }
-
-    // Download the encrypted file from Supabase Storage
-    const { data: encryptedFileData, error: downloadError } = await supabase
-      .storage
-      .from(file.storage_bucket)
-      .download(file.storage_path);
-
-    if (downloadError || !encryptedFileData) {
-      console.error('Error downloading encrypted file:', downloadError);
-      return res.status(500).json({ error: 'Failed to retrieve encrypted file' });
-    }
-
-    // Convert Blob to hex string for decryption
-    const encryptedDataHex = await blobToHexString(encryptedFileData);
-    
-    try {
-      // Decrypt the file
-      const decryptedData = decryptFile(encryptedDataHex, decryption_key, file.iv);
-      
-      // Log successful decryption
-      await logActivity(
-        user_id,
-        'FILE_DECRYPT',
-        `Decrypted file: ${file.file_name} from vault: ${file.vaults.vault_name}`,
-        file.vault_id,
-        file_id,
-        req
-      );
-      
-      // For text files, convert to UTF-8 string
-      if (file.file_type.toLowerCase() === 'txt') {
-        const textContent = decryptedData.toString('utf-8');
-        return res.json({ content: textContent });
-      }
-
-      // For other files
-      const contentType = getContentType(file.file_type);
-      res.setHeader('Content-Type', contentType);
-      res.setHeader('Content-Disposition', `inline; filename="${file.file_name}"`);
-      
-      // Send the decrypted file
-      return res.send(Buffer.from(decryptedData));
-    } catch (decryptError) {
-      console.error('Decryption failed:', decryptError);
-      return res.status(400).json({ error: 'Invalid decryption key' });
-    }
-  } catch (err) {
-    console.error('File decryption error:', err);
-    res.status(500).json({ error: 'Failed to decrypt file' });
-  }
-});
 
 // Helper function to determine the correct content type for files
 function getContentType(fileType) {
@@ -1017,31 +932,167 @@ router.get('/files/:vaultId', async (req, res) => {
 
   try {
     // Check if the vault exists
-    const vaultCheck = await db.query('SELECT * FROM vaultTable WHERE vault_id = $1', [vaultId]);
-    if (vaultCheck.rows.length === 0) {
+    const { data: vault, error: vaultError } = await supabase
+      .from('vaults')
+      .select('*')
+      .eq('vault_id', vaultId)
+      .single();
+      
+    if (vaultError || !vault) {
       return res.status(404).json({ error: 'Vault not found' });
     }
 
-    // Get all files for the vault
-    const filesQuery = await db.query(
-      `SELECT 
-        file_id as "fileId",
-        file_name as "fileName",
-        file_type as "fileType",
-        file_size as "fileSize",
-        file_path as "filePath",
-        created_at as "createdAt"
-      FROM fileTable 
-      WHERE vault_id = $1 
-      ORDER BY created_at DESC`,
-      [vaultId]
-    );
+    // Get all files for the vault from Supabase
+    const { data: files, error: filesError } = await supabase
+      .from('files')
+      .select('*')
+      .eq('vault_id', vaultId)
+      .order('created_at', { ascending: false });
+
+    if (filesError) {
+      console.error('Error fetching files:', filesError);
+      return res.status(500).json({ error: 'Failed to fetch files' });
+    }
+
+    // Format the response to match what the frontend expects
+    const formattedFiles = files.map(file => ({
+      fileId: file.file_id,
+      fileName: file.file_name,
+      fileType: file.file_type,
+      fileSize: file.file_size,
+      filePath: file.file_path,
+      createdAt: file.created_at
+    }));
 
     // Return empty array if no files found
-    res.json({ files: filesQuery.rows });
+    res.json({ files: formattedFiles });
   } catch (err) {
     console.error('Error fetching files:', err.message);
     res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// file decrypt route
+router.post('/file/decrypt', async (req, res) => {
+  const { file_id, decryption_key, user_id } = req.body;
+
+  try {
+    // Validate user_id
+    if (!user_id) {
+      return res.status(400).json({ error: 'User ID is required' });
+    }
+
+    // Get file and encryption details from Supabase
+    const { data: file, error: fileError } = await supabase
+      .from('files')
+      .select(`
+        *,
+        file_encryption_keys!file_encryption_keys_file_id_fkey(hashed_key),
+        vaults(vault_name)
+      `)
+      .eq('file_id', file_id)
+      .single();
+
+    console.log('File retrieval for verification:', {
+      fileId: file_id,
+      found: !!file,
+      hasEncryptionKeys: file && !!file.file_encryption_keys,
+      encryptionKeysCount: file?.file_encryption_keys?.length || 0
+    });
+
+    if (fileError || !file) {
+      console.error('File retrieval error:', fileError);
+      return res.status(404).json({ error: 'File not found' });
+    }
+    
+    // Ensure the user has permission to access this file
+    const { data: vaultAccess, error: accessError } = await supabase
+      .from('vaults')
+      .select('vault_id')
+      .eq('vault_id', file.vault_id)
+      .eq('user_id', user_id)
+      .single();
+      
+    if (accessError || !vaultAccess) {
+      console.error('Access check error:', accessError);
+      return res.status(403).json({ error: 'You do not have permission to access this file' });
+    }
+
+    // Download the encrypted file from Supabase Storage - USE SERVICE CLIENT
+    const storageClient = serviceClient || supabase; // Use service client if available
+    const { data: encryptedFileData, error: downloadError } = await storageClient
+      .storage
+      .from(file.storage_bucket)
+      .download(file.storage_path);
+
+    if (downloadError) {
+      console.error('Error downloading encrypted file:', downloadError);
+      console.error('File path details:', {
+        bucket: file.storage_bucket,
+        path: file.storage_path
+      });
+      
+      // Try downloading using the public URL as fallback
+      try {
+        const { data: urlData } = await supabase
+          .storage
+          .from(file.storage_bucket)
+          .getPublicUrl(file.storage_path);
+          
+        if (urlData && urlData.publicUrl) {
+          const response = await fetch(urlData.publicUrl);
+          if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+          
+          const blob = await response.blob();
+          const arrayBuffer = await blob.arrayBuffer();
+          const encryptedDataHex = Buffer.from(arrayBuffer).toString('hex');
+          
+          // Continue with decryption...
+          // ...
+        }
+      } catch (fallbackError) {
+        console.error('Fallback download failed:', fallbackError);
+        return res.status(500).json({ error: 'Failed to retrieve encrypted file' });
+      }
+    }
+
+    // Convert Blob to hex string for decryption
+    const encryptedDataHex = await blobToHexString(encryptedFileData);
+    
+    try {
+      // Decrypt the file
+      const decryptedData = decryptFile(encryptedDataHex, decryption_key, file.iv);
+      
+      // Log successful decryption
+      await logActivity(
+        user_id,
+        'FILE_DECRYPT',
+        `Decrypted file: ${file.file_name} from vault: ${file.vaults?.vault_name || 'Unknown vault'}`,
+        file.vault_id,
+        file_id,
+        req
+      );
+      
+      // For text files, convert to UTF-8 string
+      if (file.file_type.toLowerCase() === 'txt') {
+        const textContent = decryptedData.toString('utf-8');
+        return res.json({ content: textContent });
+      }
+
+      // For other files
+      const contentType = getContentType(file.file_type);
+      res.setHeader('Content-Type', contentType);
+      res.setHeader('Content-Disposition', `inline; filename="${file.file_name}"`);
+      
+      // Send the decrypted file
+      return res.send(Buffer.from(decryptedData));
+    } catch (decryptError) {
+      console.error('Decryption failed:', decryptError);
+      return res.status(400).json({ error: 'Invalid decryption key' });
+    }
+  } catch (err) {
+    console.error('File decryption error:', err);
+    res.status(500).json({ error: 'Failed to decrypt file' });
   }
 });
 
@@ -1055,36 +1106,48 @@ router.get('/files/preview/:fileId', async (req, res) => {
       return res.status(400).json({ error: 'User ID is required' });
     }
 
-    const fileQuery = await db.query(
-      'SELECT f.*, v.vault_name FROM fileTable f JOIN vaultTable v ON f.vault_id = v.vault_id WHERE file_id = $1',
-      [fileId]
-    );
+    // Get file and encryption details from Supabase
+    const { data: file, error: fileError } = await supabase
+      .from('files')
+      .select(`
+        *,
+        vaults(vault_name)
+      `)
+      .eq('file_id', fileId)
+      .single();
 
-    if (fileQuery.rows.length === 0) {
+    if (fileError || !file) {
+      console.error('File retrieval error:', fileError);
       return res.status(404).json({ error: 'File not found' });
     }
 
-    const file = fileQuery.rows[0];
+    // Ensure the user has permission to access this file
+    const { data: vaultAccess, error: accessError } = await supabase
+      .from('vaults')
+      .select('vault_id')
+      .eq('vault_id', file.vault_id)
+      .eq('user_id', userId)
+      .single();
+      
+    if (accessError || !vaultAccess) {
+      console.error('Access check error:', accessError);
+      return res.status(403).json({ error: 'You do not have permission to access this file' });
+    }
 
     // Log file preview BEFORE handling the preview
     await logActivity(
       userId,
       'FILE_PREVIEW',
-      `Previewed file: ${file.file_name} in vault: ${file.vault_name}`,
+      `Previewed file: ${file.file_name} in vault: ${file.vaults?.vault_name || 'Unknown vault'}`,
       file.vault_id,
       fileId,
       req
     );
 
-    const filePath = file.file_path;
     const fileName = file.file_name;
     const fileType = path.extname(fileName).toLowerCase().replace('.', '');
 
     console.log('File Type:', fileType);
-
-    if (!fs.existsSync(filePath)) {
-      return res.status(404).json({ error: 'File not found on server' });
-    }
 
     // Handle Word DOCX files
     if (fileType === 'docx') {
@@ -1141,7 +1204,34 @@ router.get('/files/preview/:fileId', async (req, res) => {
     // Handle Excel XLSX/XLS files
     if (['xls', 'xlsx'].includes(fileType)) {
       try {
-        const workbook = XLSX.readFile(filePath);
+        // Download the encrypted file from Supabase Storage
+        const storageClient = serviceClient || supabase;
+        const { data: encryptedFileData, error: downloadError } = await storageClient
+          .storage
+          .from(file.storage_bucket)
+          .download(file.storage_path);
+
+        if (downloadError) {
+          console.error('Error downloading encrypted file:', downloadError);
+          return res.status(500).json({ error: 'Failed to retrieve encrypted file' });
+        }
+
+        // Convert Blob to buffer for decryption
+        const encryptedDataHex = await blobToHexString(encryptedFileData);
+        
+        // Decrypt the file
+        const decryptedData = decryptFile(encryptedDataHex, decryption_key, file.iv);
+        
+        // Write to temporary file
+        const tempFilePath = `/tmp/${fileId}.${fileType}`;
+        fs.writeFileSync(tempFilePath, decryptedData);
+        
+        // Process the Excel file
+        const workbook = XLSX.readFile(tempFilePath);
+        
+        // Remove the temporary file
+        fs.unlinkSync(tempFilePath);
+        
         const firstSheetName = workbook.SheetNames[0];
 
         if (!firstSheetName) {
@@ -1176,30 +1266,59 @@ router.get('/files/raw-preview/:fileId', async (req, res) => {
       return res.status(400).json({ error: 'User ID is required' });
     }
 
-    // Get file and encryption details
-    const fileQuery = await db.query(
-      'SELECT f.*, k.hashed_key, v.vault_name FROM fileTable f JOIN fileEncryptionKeys k ON f.file_id = k.file_id JOIN vaultTable v ON f.vault_id = v.vault_id WHERE f.file_id = $1',
-      [fileId]
-    );
+    // Get file and encryption details from Supabase
+    const { data: file, error: fileError } = await supabase
+      .from('files')
+      .select(`
+        *,
+        file_encryption_keys!file_encryption_keys_file_id_fkey(hashed_key),
+        vaults(vault_name)
+      `)
+      .eq('file_id', fileId)
+      .single();
 
-    if (fileQuery.rows.length === 0) {
+    if (fileError || !file) {
+      console.error('File retrieval error:', fileError);
       return res.status(404).json({ error: 'File not found' });
     }
+    
+    // Ensure the user has permission to access this file
+    const { data: vaultAccess, error: accessError } = await supabase
+      .from('vaults')
+      .select('vault_id')
+      .eq('vault_id', file.vault_id)
+      .eq('user_id', userId)
+      .single();
+      
+    if (accessError || !vaultAccess) {
+      console.error('Access check error:', accessError);
+      return res.status(403).json({ error: 'You do not have permission to access this file' });
+    }
 
-    const file = fileQuery.rows[0];
+    // Download the encrypted file from Supabase Storage
+    const storageClient = serviceClient || supabase;
+    const { data: encryptedFileData, error: downloadError } = await storageClient
+      .storage
+      .from(file.storage_bucket)
+      .download(file.storage_path);
 
-    // Read the encrypted file
-    const encryptedData = fs.readFileSync(file.file_path, 'hex');
+    if (downloadError) {
+      console.error('Error downloading encrypted file:', downloadError);
+      return res.status(500).json({ error: 'Failed to retrieve encrypted file' });
+    }
+
+    // Convert Blob to hex string for decryption
+    const encryptedDataHex = await blobToHexString(encryptedFileData);
     
     try {
       // Decrypt the file
-      const decryptedData = decryptFile(encryptedData, decryption_key, file.iv);
+      const decryptedData = decryptFile(encryptedDataHex, decryption_key, file.iv);
       
       // Log successful decryption BEFORE sending response
       await logActivity(
         userId,
         'FILE_DECRYPT',
-        `Decrypted file for preview: ${file.file_name} from vault: ${file.vault_name}`,
+        `Decrypted file for preview: ${file.file_name} from vault: ${file.vaults?.vault_name || 'Unknown vault'}`,
         file.vault_id,
         fileId,
         req
@@ -1218,6 +1337,210 @@ router.get('/files/raw-preview/:fileId', async (req, res) => {
   } catch (err) {
     console.error('File decryption error:', err);
     res.status(500).json({ error: 'Failed to decrypt file' });
+  }
+});
+
+// Verify file decryption key before deletion
+router.post('/file/verify-delete', async (req, res) => {
+  const { file_id, decryption_key, user_id } = req.body;
+
+  try {
+    // Validate inputs
+    if (!file_id || !decryption_key || !user_id) {
+      return res.status(400).json({ error: 'Missing required fields' });
+    }
+
+    // Get file and encryption details from Supabase
+    const { data: file, error: fileError } = await supabase
+      .from('files')
+      .select(`
+        *,
+        file_encryption_keys!file_encryption_keys_file_id_fkey(hashed_key),
+        vaults(vault_name)
+      `)
+      .eq('file_id', file_id)
+      .single();
+
+    console.log('File retrieval for verification:', {
+      fileId: file_id,
+      found: !!file,
+      hasEncryptionKeys: file && !!file.file_encryption_keys,
+      encryptionKeysCount: file?.file_encryption_keys?.length || 0
+    });
+
+    if (fileError || !file) {
+      console.error('File retrieval error:', fileError);
+      return res.status(404).json({ error: 'File not found' });
+    }
+    
+    // Ensure the user has permission to access this file
+    const { data: vaultAccess, error: accessError } = await supabase
+      .from('vaults')
+      .select('vault_id')
+      .eq('vault_id', file.vault_id)
+      .eq('user_id', user_id)
+      .single();
+      
+    if (accessError || !vaultAccess) {
+      console.error('Access check error:', accessError);
+      return res.status(403).json({ error: 'You do not have permission to access this file' });
+    }
+
+    // Get the hashed key from the file's encryption keys
+    const encryptionKeys = file.file_encryption_keys;
+    if (!encryptionKeys || encryptionKeys.length === 0) {
+      console.error('No encryption keys found for file:', file.file_id);
+      return res.status(404).json({ error: 'Encryption key not found for this file' });
+    }
+    
+    const hashedKey = encryptionKeys[0].hashed_key;
+    if (!hashedKey) {
+      console.error('Hashed key is missing in the encryption key record');
+      return res.status(404).json({ error: 'Encryption key data is incomplete' });
+    }
+
+    // Verify the decryption key
+    const isKeyValid = await verifyEncryptionKey(decryption_key, hashedKey);
+    
+    if (!isKeyValid) {
+      return res.status(401).json({ error: 'Invalid decryption key' });
+    }
+
+    // Store file details for response
+    const fileDetails = {
+      file_id: file.file_id,
+      file_name: file.file_name,
+      vault_name: file.vaults?.vault_name || 'Unknown vault'
+    };
+
+    // Log the verification attempt
+    try {
+      await logActivity(
+        user_id,
+        'FILE_DELETE_VERIFY',
+        `Verified decryption key for file deletion: ${file.file_name}`,
+        file.vault_id,
+        file_id,
+        req
+      );
+    } catch (logError) {
+      console.error('Error logging verification activity:', logError);
+      // Continue even if logging fails
+    }
+
+    // Return success with file details
+    res.json({
+      message: 'Decryption key verified successfully',
+      file: fileDetails
+    });
+  } catch (err) {
+    console.error('File verification error:', err);
+    res.status(500).json({ error: 'Failed to verify decryption key' });
+  }
+});
+
+// Delete file route
+router.delete('/file/delete/:fileId', async (req, res) => {
+  const { fileId } = req.params;
+  const { user_id } = req.body;
+
+  try {
+    // Validate user_id
+    if (!user_id) {
+      return res.status(400).json({ error: 'User ID is required' });
+    }
+
+    // Get file details from Supabase
+    const { data: file, error: fileError } = await supabase
+      .from('files')
+      .select(`
+        *,
+        vaults(vault_name)
+      `)
+      .eq('file_id', fileId)
+      .single();
+
+    if (fileError || !file) {
+      console.error('File retrieval error:', fileError);
+      return res.status(404).json({ error: 'File not found' });
+    }
+    
+    // Ensure the user has permission to delete this file
+    const { data: vaultAccess, error: accessError } = await supabase
+      .from('vaults')
+      .select('vault_id')
+      .eq('vault_id', file.vault_id)
+      .eq('user_id', user_id)
+      .single();
+      
+    if (accessError || !vaultAccess) {
+      console.error('Access check error:', accessError);
+      return res.status(403).json({ error: 'You do not have permission to delete this file' });
+    }
+
+    // Store file information for response before deletion
+    const fileName = file.file_name;
+    const vaultName = file.vaults?.vault_name || 'Unknown vault';
+    const vaultId = file.vault_id;
+
+    // Log the deletion BEFORE deleting the file to avoid foreign key constraint issues
+    try {
+      await logActivity(
+        user_id,
+        'FILE_DELETE',
+        `Deleted file: ${fileName} from vault: ${vaultName}`,
+        vaultId,
+        fileId,
+        req
+      );
+    } catch (logError) {
+      console.error('Error logging activity:', logError);
+      // Continue with deletion even if logging fails
+    }
+
+    // Delete the file from storage
+    if (file.storage_bucket && file.storage_path) {
+      const storageClient = serviceClient || supabase;
+      const { error: storageError } = await storageClient
+        .storage
+        .from(file.storage_bucket)
+        .remove([file.storage_path]);
+
+      if (storageError) {
+        console.error('Storage deletion error:', storageError);
+        // Continue with database deletion even if storage deletion fails
+      }
+    }
+
+    // Delete the file's encryption key
+    const { error: keyDeleteError } = await supabase
+      .from('file_encryption_keys')
+      .delete()
+      .eq('file_id', fileId);
+      
+    if (keyDeleteError) {
+      console.error('Key deletion error:', keyDeleteError);
+      // Continue with file deletion
+    }
+
+    // Delete the file record
+    const { error: fileDeleteError } = await supabase
+      .from('files')
+      .delete()
+      .eq('file_id', fileId);
+      
+    if (fileDeleteError) {
+      console.error('File record deletion error:', fileDeleteError);
+      return res.status(500).json({ error: 'Failed to delete file record' });
+    }
+
+    res.json({ 
+      message: 'File deleted successfully',
+      fileName: fileName
+    });
+  } catch (err) {
+    console.error('File deletion error:', err);
+    res.status(500).json({ error: 'Failed to delete file' });
   }
 });
 
@@ -1345,6 +1668,7 @@ router.get('/test-storage-upload', async (req, res) => {
     res.status(500).json({ success: false, error: err.message });
   }
 });
+
 
 // Export the router
 export default router; 

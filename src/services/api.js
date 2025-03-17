@@ -1,6 +1,6 @@
 import axios from 'axios';
 
-const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:5000/api';
+const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:5001/api';
 const API_TIMEOUT = process.env.REACT_APP_API_TIMEOUT || 30000;
 
 // Log API configuration for debugging
@@ -199,7 +199,7 @@ export const uploadFile = async (formData, onProgress) => {
       contentType: formData.get('file')?.type
     });
 
-    const response = await axios.post('http://localhost:5000/api/file/upload', formData, {
+    const response = await axios.post('http://localhost:5001/api/file/upload', formData, {
       headers: {
         'Content-Type': 'multipart/form-data'
       },
@@ -252,6 +252,46 @@ export const fetchFiles = async (vaultId) => {
   }
 };
 
+// File decryption route
+export const decryptFile = async (fileId, decryptionKey) => {
+  try {
+    // Get userId from localStorage
+    const userData = JSON.parse(localStorage.getItem('userData'));
+    if (!userData || !userData.userId) {
+      throw new Error('User ID not found');
+    }
+
+    const response = await api.post('/file/decrypt', {
+      file_id: fileId,
+      decryption_key: decryptionKey,
+      user_id: userData.userId
+    }, {
+      responseType: 'blob'
+    });
+
+    // If the response is JSON (error), convert it to text
+    if (response.headers['content-type']?.includes('application/json')) {
+      const text = await response.data.text();
+      const error = JSON.parse(text);
+      throw new Error(error.error || 'Failed to decrypt file');
+    }
+
+    return response.data;
+  } catch (error) {
+    if (error.response?.data instanceof Blob) {
+      const text = await error.response.data.text();
+      try {
+        const json = JSON.parse(text);
+        throw new Error(json.error || 'Failed to decrypt file');
+      } catch (e) {
+        throw new Error('Failed to decrypt file');
+      }
+    }
+    throw error.response?.data?.error || error.message || 'Failed to decrypt file';
+  }
+};
+
+
 export const downloadFile = async (fileId, userId) => {
   try {
     const response = await api.get(`/files/download/${fileId}?userId=${userId}`, {
@@ -272,11 +312,81 @@ export const previewFile = async (fileId, userId) => {
   }
 };
 
-export const deleteFile = async (fileId, userId) => {
+// Raw file preview
+export const rawPreviewFile = async (fileId, decryptionKey) => {
   try {
-    const response = await api.delete(`/files/${fileId}`, {
-      data: { userId }
+    // Get userId from localStorage
+    const userData = JSON.parse(localStorage.getItem('userData'));
+    if (!userData || !userData.userId) {
+      throw new Error('User ID not found');
+    }
+
+    const response = await api.get(`/files/raw-preview/${fileId}`, {
+      params: {
+        decryption_key: decryptionKey,
+        userId: userData.userId
+      },
+      responseType: 'blob'
     });
+
+    // If the response is JSON (error), convert it to text
+    if (response.headers['content-type']?.includes('application/json')) {
+      const text = await response.data.text();
+      const error = JSON.parse(text);
+      throw new Error(error.error || 'Failed to preview file');
+    }
+
+    return response.data;
+  } catch (error) {
+    if (error.response?.data instanceof Blob) {
+      const text = await error.response.data.text();
+      try {
+        const json = JSON.parse(text);
+        throw new Error(json.error || 'Failed to preview file');
+      } catch (e) {
+        throw new Error('Failed to preview file');
+      }
+    }
+    throw error.response?.data?.error || error.message || 'Failed to preview file';
+  }
+};
+
+// Verify file decryption key before deletion
+export const verifyFileDelete = async (fileId, decryptionKey) => {
+  try {
+    // Get userId from localStorage
+    const userData = JSON.parse(localStorage.getItem('userData'));
+    if (!userData || !userData.userId) {
+      throw new Error('User ID not found');
+    }
+
+    const response = await api.post('/file/verify-delete', {
+      file_id: fileId,
+      decryption_key: decryptionKey,
+      user_id: userData.userId
+    });
+
+    console.log('Decryption key verification successful:', response.data);
+    return response.data;
+  } catch (error) {
+    console.error('Decryption key verification error:', error);
+    throw new Error(error.response?.data?.error || 'Failed to verify decryption key');
+  }
+};
+
+export const deleteFile = async (fileId) => {
+  try {
+    // Get userId from localStorage
+    const userData = JSON.parse(localStorage.getItem('userData'));
+    if (!userData || !userData.userId) {
+      throw new Error('User ID not found');
+    }
+
+    const response = await api.delete(`/file/delete/${fileId}`, {
+      data: { user_id: userData.userId }
+    });
+
+    console.log('File deletion successful:', response.data);
     return response.data;
   } catch (error) {
     console.error('Delete file error:', error);
@@ -379,82 +489,5 @@ export const searchActivities = async (searchTerm, filters = {}) => {
     }
 };
 
-// File decryption route
-export const decryptFile = async (fileId, decryptionKey) => {
-  try {
-    // Get userId from localStorage
-    const userData = JSON.parse(localStorage.getItem('userData'));
-    if (!userData || !userData.userId) {
-      throw new Error('User ID not found');
-    }
-
-    const response = await api.post('/file/decrypt', {
-      file_id: fileId,
-      decryption_key: decryptionKey,
-      user_id: userData.userId
-    }, {
-      responseType: 'blob'
-    });
-
-    // If the response is JSON (error), convert it to text
-    if (response.headers['content-type']?.includes('application/json')) {
-      const text = await response.data.text();
-      const error = JSON.parse(text);
-      throw new Error(error.error || 'Failed to decrypt file');
-    }
-
-    return response.data;
-  } catch (error) {
-    if (error.response?.data instanceof Blob) {
-      const text = await error.response.data.text();
-      try {
-        const json = JSON.parse(text);
-        throw new Error(json.error || 'Failed to decrypt file');
-      } catch (e) {
-        throw new Error('Failed to decrypt file');
-      }
-    }
-    throw error.response?.data?.error || error.message || 'Failed to decrypt file';
-  }
-};
-
-// Raw file preview
-export const rawPreviewFile = async (fileId, decryptionKey) => {
-  try {
-    // Get userId from localStorage
-    const userData = JSON.parse(localStorage.getItem('userData'));
-    if (!userData || !userData.userId) {
-      throw new Error('User ID not found');
-    }
-
-    const response = await api.get(`/files/raw-preview/${fileId}`, {
-      params: {
-        decryption_key: decryptionKey,
-        userId: userData.userId
-      },
-      responseType: 'blob'
-    });
-
-    // If the response is JSON (error), convert it to text
-    if (response.headers['content-type']?.includes('application/json')) {
-      const text = await response.data.text();
-      const error = JSON.parse(text);
-      throw new Error(error.error || 'Failed to preview file');
-    }
-
-    return response.data;
-  } catch (error) {
-    if (error.response?.data instanceof Blob) {
-      const text = await error.response.data.text();
-      try {
-        const json = JSON.parse(text);
-        throw new Error(json.error || 'Failed to preview file');
-      } catch (e) {
-        throw new Error('Failed to preview file');
-      }
-    }
-    throw error.response?.data?.error || error.message || 'Failed to preview file';
-  }
-};
 
 export default api; 

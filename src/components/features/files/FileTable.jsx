@@ -49,6 +49,10 @@ export default function FileTable({ vaultId, refreshTrigger }) {
   const [selectedFile, setSelectedFile] = useState(null);
   const [previewOpen, setPreviewOpen] = useState(false);
   const [decryptionKey, setDecryptionKey] = useState('');
+  const [verificationMessage, setVerificationMessage] = useState('');
+  const [verificationError, setVerificationError] = useState('');
+  const [isVerifying, setIsVerifying] = useState(false);
+  const [isVerified, setIsVerified] = useState(false);
   const [showDecryptDialog, setShowDecryptDialog] = useState(false);
   const [decryptionError, setDecryptionError] = useState('');
   const [decrypting, setDecrypting] = useState(false);
@@ -214,42 +218,71 @@ export default function FileTable({ vaultId, refreshTrigger }) {
   const handleDeleteClick = async (e, file) => {
     e.stopPropagation(); // Prevent row click event
     setFileToDelete(file);
+    setDecryptionKey('');
+    setVerificationMessage('');
+    setVerificationError('');
+    setIsVerified(false);
     setDeleteDialogOpen(true);
   };
 
   const handleDeleteConfirm = async () => {
     if (!fileToDelete) return;
 
+    if (!isVerified) {
+      // First step: Verify the decryption key
+      setIsVerifying(true);
+      setVerificationError('');
+      setVerificationMessage('');
+      
+      try {
+        // Import the verifyFileDelete function
+        const { verifyFileDelete } = await import('../../../services/api');
+        
+        // Verify the decryption key
+        const result = await verifyFileDelete(fileToDelete.fileId, decryptionKey);
+        
+        // Set verification message with file details
+        setVerificationMessage(`Verification successful. Delete "${result.file.file_name}" from ${result.file.vault_name}?`);
+        setIsVerified(true);
+      } catch (error) {
+        console.error('Verification error:', error);
+        
+        // Display a user-friendly error message
+        if (error.message.includes('Encryption key not found')) {
+          setVerificationError('File encryption key could not be found. This may be due to a database inconsistency.');
+        } else if (error.message.includes('Invalid decryption key')) {
+          setVerificationError('The decryption key you entered is incorrect. Please try again.');
+        } else {
+          setVerificationError(error.message || 'Verification failed. Please try again later.');
+        }
+      } finally {
+        setIsVerifying(false);
+      }
+      return;
+    }
+
+    // Second step: Delete the file after verification
     setIsDeleting(true);
     try {
-      // Get userId from localStorage
-      const userData = JSON.parse(localStorage.getItem('userData'));
-      if (!userData || !userData.userId) {
-        throw new Error('User ID not found');
-      }
-
-      const response = await fetch(`/api/files/${fileToDelete.fileId}`, {
-        method: 'DELETE',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ userId: userData.userId })
-      });
-
-      if (!response.ok) {
-        const data = await response.json();
-        throw new Error(data.error || 'Failed to delete file');
-      }
+      // Import the deleteFile function
+      const { deleteFile } = await import('../../../services/api');
+      
+      // Delete the file
+      await deleteFile(fileToDelete.fileId);
 
       // Remove file from the list
       setFiles(files.filter(f => f.fileId !== fileToDelete.fileId));
       setDeleteDialogOpen(false);
+      
+      // Show success notification (you can implement this)
+      // showNotification('File deleted successfully');
     } catch (error) {
       console.error('Delete error:', error);
-      // Show error message to user
+      setVerificationError(error.message);
     } finally {
       setIsDeleting(false);
-      setFileToDelete(null);
+      setIsVerified(false);
+      setDecryptionKey('');
     }
   };
 
@@ -395,28 +428,57 @@ export default function FileTable({ vaultId, refreshTrigger }) {
       {/* Delete Confirmation Dialog */}
       <Dialog
         open={deleteDialogOpen}
-        onClose={() => !isDeleting && setDeleteDialogOpen(false)}
+        onClose={() => !isDeleting && !isVerifying && setDeleteDialogOpen(false)}
       >
         <DialogTitle>Delete File</DialogTitle>
         <DialogContent>
-          <Typography>
-            Are you sure you want to delete "{fileToDelete?.fileName}"? 
-            This action cannot be undone.
-          </Typography>
+          {!isVerified ? (
+            <>
+              <Typography gutterBottom>
+                To delete the file "{fileToDelete?.fileName}", please enter your decryption key.
+              </Typography>
+              <TextField
+                autoFocus
+                margin="dense"
+                label="Decryption Key"
+                type="password"
+                fullWidth
+                value={decryptionKey}
+                onChange={(e) => setDecryptionKey(e.target.value)}
+                disabled={isVerifying}
+                error={!!verificationError}
+                helperText={verificationError}
+              />
+            </>
+          ) : (
+            <Typography>
+              {verificationMessage}
+            </Typography>
+          )}
         </DialogContent>
         <DialogActions>
           <Button 
-            onClick={() => setDeleteDialogOpen(false)}
-            disabled={isDeleting}
+            onClick={() => {
+              setDeleteDialogOpen(false);
+              setIsVerified(false);
+              setDecryptionKey('');
+            }}
+            disabled={isDeleting || isVerifying}
           >
             Cancel
           </Button>
           <Button
             onClick={handleDeleteConfirm}
             color="error"
-            disabled={isDeleting}
+            disabled={isDeleting || isVerifying || (!isVerified && !decryptionKey)}
           >
-            {isDeleting ? 'Deleting...' : 'Delete'}
+            {isVerifying 
+              ? 'Verifying...' 
+              : isDeleting 
+                ? 'Deleting...' 
+                : isVerified 
+                  ? 'Confirm Delete' 
+                  : 'Verify'}
           </Button>
         </DialogActions>
       </Dialog>
