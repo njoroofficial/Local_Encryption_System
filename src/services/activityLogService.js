@@ -63,4 +63,46 @@ export async function searchActivities(userId, searchTerm = '', filters = {}, pa
         console.error('Error searching activities:', error);
         throw error;
     }
+}
+
+/**
+ * Export activities with filters
+ * @param {string} userId - The ID of the user
+ * @param {Object} filters - Filters object
+ * @param {string} format - Export format (csv or excel)
+ * @returns {Blob} - Blob containing exported data
+ */
+export async function exportActivities(userId, filters = {}, format = 'csv') {
+    try {
+        const response = await api.post(`/activities/export/${userId}`, {
+            filters,
+            format
+        }, {
+            responseType: 'blob' // Important for file downloads
+        });
+        
+        // Create a download link
+        const blob = new Blob([response.data], { 
+            type: format === 'csv' ? 'text/csv' : 'application/vnd.ms-excel' 
+        });
+        
+        // Create a filename with date
+        const date = new Date().toISOString().split('T')[0];
+        const filename = `activity_logs_${date}.${format}`;
+        
+        // Create download link and trigger download
+        const url = window.URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.setAttribute('download', filename);
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        window.URL.revokeObjectURL(url);
+        
+        return true;
+    } catch (error) {
+        console.error('Error exporting activities:', error);
+        throw error;
+    }
 } 

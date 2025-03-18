@@ -25,7 +25,13 @@ import {
   CircularProgress,
   Tooltip,
   Pagination,
-  Autocomplete
+  Autocomplete,
+  FormControlLabel,
+  Radio,
+  RadioGroup,
+  IconButton,
+  Alert,
+  Snackbar
 } from '@mui/material';
 import SearchIcon from '@mui/icons-material/Search';
 import FilterListIcon from '@mui/icons-material/FilterList';
@@ -38,7 +44,9 @@ import CloudDownloadIcon from '@mui/icons-material/CloudDownload';
 import VpnKeyIcon from '@mui/icons-material/VpnKey';
 import InfoIcon from '@mui/icons-material/Info';
 import LockOpenIcon from '@mui/icons-material/LockOpen';
-import { getActivities, searchActivities } from '../../../services/activityLogService';
+import DownloadIcon from '@mui/icons-material/Download';
+import FileDownloadIcon from '@mui/icons-material/FileDownload';
+import { getActivities, searchActivities, exportActivities } from '../../../services/activityLogService';
 import '../../../styles/activityLog.css';
 
 const ACTION_LABELS = {
@@ -51,7 +59,9 @@ const ACTION_LABELS = {
   FILE_DELETE: 'File Delete',
   PASSWORD_CHANGE: 'Password Changed',
   VAULT_KEY_CHANGE: 'Vault Key Changed',
-  FILE_KEY_CHANGE: 'File Key Changed'
+  FILE_KEY_CHANGE: 'File Key Changed',
+  FILE_DECRYPT: 'File Decrypted',
+  FILE_REPAIR: 'File Repaired'
 };
 
 const ActivityLog = ({ userId }) => {
@@ -71,6 +81,19 @@ const ActivityLog = ({ userId }) => {
   const [actionOptions, setActionOptions] = useState([]);
   const [matchingSuggestions, setMatchingSuggestions] = useState([]);
   const [showSuggestions, setShowSuggestions] = useState(false);
+  
+  // Export related states
+  const [showExportDialog, setShowExportDialog] = useState(false);
+  const [exportFormat, setExportFormat] = useState('csv');
+  const [exportFilters, setExportFilters] = useState({
+    actionType: '',
+    startDate: '',
+    endDate: ''
+  });
+  const [exportLoading, setExportLoading] = useState(false);
+  const [snackbarOpen, setSnackbarOpen] = useState(false);
+  const [snackbarMessage, setSnackbarMessage] = useState('');
+  const [snackbarSeverity, setSnackbarSeverity] = useState('success');
 
   // Create action options for autocomplete
   useEffect(() => {
@@ -80,6 +103,14 @@ const ActivityLog = ({ userId }) => {
     }));
     setActionOptions(options);
   }, []);
+  
+  // Initialize export filters with current applied filters when opening export dialog
+  useEffect(() => {
+    if (showExportDialog) {
+      const currentFilters = { ...filters };
+      setExportFilters(currentFilters);
+    }
+  }, [showExportDialog, filters]);
 
   const handleSearch = useCallback(async () => {
     console.log('ActivityLog: handleSearch called with:', { userId, searchTerm, filters, page });
@@ -325,6 +356,10 @@ const ActivityLog = ({ userId }) => {
         return <KeyIcon color="primary" />;
       case 'FILE_KEY_CHANGE':
         return <KeyIcon color="primary" />;
+      case 'FILE_DECRYPT':
+        return <LockOpenIcon color="primary" />;
+      case 'FILE_REPAIR':
+        return <KeyIcon color="warning" />;
       default:
         return <InfoIcon />;
     }
@@ -358,6 +393,42 @@ const ActivityLog = ({ userId }) => {
     setTimeout(() => {
       handleSearch();
     }, 0);
+  };
+  
+  // Handle export dialog open
+  const handleExportOpen = () => {
+    setShowExportDialog(true);
+  };
+  
+  // Handle export dialog close
+  const handleExportClose = () => {
+    setShowExportDialog(false);
+  };
+  
+  // Handle export submit
+  const handleExportSubmit = async () => {
+    setExportLoading(true);
+    
+    try {
+      await exportActivities(userId, exportFilters, exportFormat);
+      
+      setSnackbarMessage(`Activity logs exported successfully as ${exportFormat.toUpperCase()}`);
+      setSnackbarSeverity('success');
+      setSnackbarOpen(true);
+      setShowExportDialog(false);
+    } catch (err) {
+      console.error('Error exporting activities:', err);
+      setSnackbarMessage(`Failed to export logs: ${err.message || 'Unknown error'}`);
+      setSnackbarSeverity('error');
+      setSnackbarOpen(true);
+    } finally {
+      setExportLoading(false);
+    }
+  };
+  
+  // Handle snackbar close
+  const handleSnackbarClose = () => {
+    setSnackbarOpen(false);
   };
 
   return (
@@ -438,6 +509,14 @@ const ActivityLog = ({ userId }) => {
                 onClick={() => setShowFilterDialog(true)}
               >
                 Filter
+              </Button>
+              <Button
+                variant="outlined"
+                color="secondary"
+                startIcon={<FileDownloadIcon />}
+                onClick={handleExportOpen}
+              >
+                Export
               </Button>
             </Box>
           </Box>
@@ -559,6 +638,7 @@ const ActivityLog = ({ userId }) => {
             />
           </Box>
 
+          {/* Filter Dialog */}
           <Dialog open={showFilterDialog} onClose={() => setShowFilterDialog(false)}>
             <DialogTitle>Filter Activities</DialogTitle>
             <DialogContent sx={{ minWidth: 300 }}>
@@ -600,6 +680,92 @@ const ActivityLog = ({ userId }) => {
               </Button>
             </DialogActions>
           </Dialog>
+          
+          {/* Export Dialog */}
+          <Dialog open={showExportDialog} onClose={handleExportClose}>
+            <DialogTitle>Export Activity Logs</DialogTitle>
+            <DialogContent sx={{ minWidth: 400 }}>
+              <Box sx={{ mt: 2 }}>
+                <Typography variant="subtitle1" gutterBottom>
+                  Export Format
+                </Typography>
+                <RadioGroup
+                  value={exportFormat}
+                  onChange={(e) => setExportFormat(e.target.value)}
+                  row
+                >
+                  <FormControlLabel value="csv" control={<Radio />} label="CSV" />
+                  <FormControlLabel value="excel" control={<Radio />} label="Excel" />
+                </RadioGroup>
+              </Box>
+              
+              <Box sx={{ mt: 3 }}>
+                <Typography variant="subtitle1" gutterBottom>
+                  Filter Logs
+                </Typography>
+                <FormControl fullWidth margin="normal">
+                  <InputLabel>Action Type</InputLabel>
+                  <Select
+                    value={exportFilters.actionType}
+                    onChange={(e) => setExportFilters({ ...exportFilters, actionType: e.target.value })}
+                  >
+                    <MenuItem value="">All Actions</MenuItem>
+                    {Object.entries(ACTION_LABELS).map(([key, label]) => (
+                      <MenuItem key={key} value={key}>{label}</MenuItem>
+                    ))}
+                  </Select>
+                </FormControl>
+                <TextField
+                  fullWidth
+                  margin="normal"
+                  label="Start Date"
+                  type="date"
+                  value={exportFilters.startDate}
+                  onChange={(e) => setExportFilters({ ...exportFilters, startDate: e.target.value })}
+                  InputLabelProps={{ shrink: true }}
+                />
+                <TextField
+                  fullWidth
+                  margin="normal"
+                  label="End Date"
+                  type="date"
+                  value={exportFilters.endDate}
+                  onChange={(e) => setExportFilters({ ...exportFilters, endDate: e.target.value })}
+                  InputLabelProps={{ shrink: true }}
+                />
+              </Box>
+            </DialogContent>
+            <DialogActions>
+              <Button onClick={handleExportClose} disabled={exportLoading}>
+                Cancel
+              </Button>
+              <Button 
+                onClick={handleExportSubmit} 
+                variant="contained" 
+                color="primary"
+                disabled={exportLoading}
+                startIcon={exportLoading ? <CircularProgress size={20} /> : <FileDownloadIcon />}
+              >
+                {exportLoading ? 'Exporting...' : 'Export'}
+              </Button>
+            </DialogActions>
+          </Dialog>
+          
+          {/* Snackbar for notifications */}
+          <Snackbar
+            open={snackbarOpen}
+            autoHideDuration={6000}
+            onClose={handleSnackbarClose}
+            anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
+          >
+            <Alert 
+              onClose={handleSnackbarClose} 
+              severity={snackbarSeverity}
+              sx={{ width: '100%' }}
+            >
+              {snackbarMessage}
+            </Alert>
+          </Snackbar>
         </>
       )}
     </div>

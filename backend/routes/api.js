@@ -11,6 +11,10 @@ import { encryptFile, decryptFile } from '../encryptionLogic.js';
 import { logActivity, getActivities, searchActivities } from '../services/activityLogService.js';
 import { supabase, serviceClient } from '../supabaseClient.js';
 import crypto from 'crypto';
+import multer from 'multer';
+import { v4 as uuidv4 } from 'uuid';
+import { fileURLToPath } from 'url';
+import { dirname } from 'path';
 
 
 
@@ -1230,26 +1234,23 @@ router.post('/file/decrypt', async (req, res) => {
     // Verify the decryption key before attempting to download and decrypt
     // This depends on the type of encryption used
     if (file.encryption_type === 'vault') {
-      // For vault-encrypted files, verify against the vault key
+      // For vault-encrypted files, we'll skip verifying against the current vault key
+      // This allows users to decrypt files encrypted with previous vault keys
+      console.log('File uses vault encryption - will attempt direct decryption with provided key');
+      
+      // Retrieve the vault name for logging
       const { data: vault, error: vaultError } = await supabase
         .from('vaults')
-        .select('vault_key')
+        .select('vault_name')
         .eq('vault_id', file.vault_id)
         .single();
         
       if (vaultError || !vault) {
-        console.error('Vault retrieval error during key verification:', vaultError);
-        return res.status(404).json({ error: 'Vault not found' });
+        console.error('Vault retrieval error during name lookup:', vaultError);
+        // Continue anyway, this is just for logging purposes
+      } else {
+        console.log(`File belongs to vault: ${vault.vault_name}`);
       }
-      
-      // Verify the provided key against the vault key
-      const isKeyValid = await bcrypt.compare(decryption_key, vault.vault_key);
-      if (!isKeyValid) {
-        console.error('Invalid vault key provided for file decryption');
-        return res.status(401).json({ error: 'Invalid decryption key' });
-      }
-      
-      console.log('Vault key verified successfully for file decryption');
     } else {
       // For custom-encrypted files, verify against the file's key
       if (!file.file_encryption_keys || file.file_encryption_keys.length === 0) {
@@ -1319,7 +1320,36 @@ router.post('/file/decrypt', async (req, res) => {
         ivLength: file.iv?.length,
         encryptionType: file.encryption_type,
         hasIV: !!file.iv,
+        encryptedDataLength: encryptedDataHex?.length
       });
+      
+      // Check if IV is valid format before attempting decryption
+      if (!file.iv || typeof file.iv !== 'string' || file.iv.length !== 32) {
+        console.error(`Invalid IV format for file ${file_id}:`, {
+          iv: file.iv,
+          type: typeof file.iv,
+          length: file.iv?.length
+        });
+        
+        // Try to update the file's status as needing repair
+        try {
+          await supabase
+            .from('files')
+            .update({
+              encryption_status: 'needs_repair',
+              updated_at: new Date().toISOString()
+            })
+            .eq('file_id', file_id);
+        } catch (repairError) {
+          console.error('Failed to mark file for repair:', repairError);
+        }
+        
+        return res.status(400).json({ 
+          error: 'File initialization vector (IV) is invalid. The file needs to be re-encrypted.',
+          needsRepair: true,
+          details: 'Contact support or try re-uploading this file'
+        });
+      }
       
       // Decrypt the file
       const decryptedData = decryptFile(encryptedDataHex, decryption_key, file.iv);
@@ -1359,13 +1389,69 @@ router.post('/file/decrypt', async (req, res) => {
       });
       
       let errorMessage = 'Invalid decryption key';
-      if (decryptError.message && decryptError.message.includes('bad decrypt')) {
-        errorMessage = 'Invalid decryption key or file format error. The file encryption may be corrupted.';
-      } else if (decryptError.message && decryptError.message.includes('IV')) {
-        errorMessage = 'Initialization Vector (IV) error. The file may need to be re-uploaded.';
+      let errorCode = 'INVALID_KEY';
+      let needsRepair = false;
+      let vaultKeyChanged = false;
+      
+      // For vault-encrypted files, check if vault key has been changed recently
+      if (file.encryption_type === 'vault' && 
+          (decryptError.code === 'ERR_OSSL_BAD_DECRYPT' || 
+          (decryptError.message && decryptError.message.includes('bad decrypt')))) {
+        // Check if vault was updated more recently than the file
+        const { data: vault, error: vaultError } = await supabase
+          .from('vaults')
+          .select('updated_at')
+          .eq('vault_id', file.vault_id)
+          .single();
+          
+        if (!vaultError && vault && vault.updated_at && file.updated_at) {
+          const vaultUpdateTime = new Date(vault.updated_at).getTime();
+          const fileUpdateTime = new Date(file.updated_at).getTime();
+          
+          if (vaultUpdateTime > fileUpdateTime) {
+            console.log('Vault key was updated after this file was encrypted');
+            vaultKeyChanged = true;
+            errorMessage = 'This file was encrypted with a previous vault key. Please use the original key that was active when this file was uploaded.';
+            errorCode = 'OLD_VAULT_KEY_NEEDED';
+          }
+        }
       }
       
-      return res.status(400).json({ error: errorMessage });
+      if (decryptError.code === 'ERR_OSSL_BAD_DECRYPT' || 
+          (decryptError.message && decryptError.message.includes('bad decrypt'))) {
+        if (!vaultKeyChanged) {
+          errorMessage = 'Invalid decryption key or file format error. The file encryption may be corrupted.';
+          errorCode = 'DECRYPT_ERROR';
+        }
+        needsRepair = true;
+        
+        // Try to update the file's status
+        try {
+          await supabase
+            .from('files')
+            .update({
+              encryption_status: 'needs_repair',
+              updated_at: new Date().toISOString()
+            })
+            .eq('file_id', file_id);
+            
+          console.log(`Marked file ${file_id} for repair due to decryption error`);
+        } catch (repairError) {
+          console.error('Failed to mark file for repair:', repairError);
+        }
+      } else if (decryptError.message && decryptError.message.includes('IV')) {
+        errorMessage = 'Initialization Vector (IV) error. The file may need to be re-uploaded.';
+        errorCode = 'IV_ERROR';
+        needsRepair = true;
+      }
+      
+      return res.status(400).json({ 
+        error: errorMessage,
+        code: errorCode,
+        needsRepair: needsRepair,
+        vaultKeyChanged: vaultKeyChanged,
+        details: needsRepair ? 'Contact support or try re-uploading this file' : undefined
+      });
     }
   } catch (err) {
     console.error('File decryption error:', err);
@@ -2167,15 +2253,11 @@ router.post('/vaults/:vaultId/change-key', async (req, res) => {
       // Get current time for update
       const now = new Date().toISOString();
       
-      // Create the update object - only include updated_at if it exists in the vault schema
+      // Create the update object with updated_at since it now exists in the schema
       const updateData = {
-        vault_key: hashedNewKey
+        vault_key: hashedNewKey,
+        updated_at: now
       };
-      
-      // Add updated_at only if the field exists in the vault object
-      if ('updated_at' in vault || 'updatedAt' in vault) {
-        updateData.updated_at = now;
-      }
       
       console.log('Update data structure:', Object.keys(updateData));
       
@@ -2188,162 +2270,23 @@ router.post('/vaults/:vaultId/change-key', async (req, res) => {
         
       if (updateError) {
         console.error('Vault key update error:', updateError);
-        
-        // Try a second approach - update just the vault_key without updated_at
-        if (updateError.message && (updateError.message.includes('column') || updateError.message.includes('field'))) {
-          console.log('Trying simplified update without updated_at field');
-          
-          const { error: simpleUpdateError } = await supabase
-            .from('vaults')
-            .update({ vault_key: hashedNewKey })
-            .eq('vault_id', vaultId)
-            .eq('user_id', userId);
-            
-          if (simpleUpdateError) {
-            console.error('Simplified vault key update also failed:', simpleUpdateError);
-            return res.status(500).json({ error: 'Failed to update vault key in database', details: simpleUpdateError.message });
-          }
-        } else {
-          return res.status(500).json({ error: 'Failed to update vault key in database', details: updateError.message });
-        }
+        return res.status(500).json({ error: 'Failed to update vault key in database', details: updateError.message });
       }
       
       console.log('Vault key updated successfully for vault:', vaultId);
       
-      let updatedFilesCount = 0;
-      let updatedFileNames = [];
-      
-      // Find files that use vault encryption and update their references
+      // Check for files encrypted with this vault key (just for informational purposes)
       const { data: vaultEncryptedFiles, error: filesQueryError } = await supabase
         .from('files')
-        .select('*')
+        .select('count')
         .eq('vault_id', vaultId)
         .eq('encryption_type', 'vault');
         
-      if (!filesQueryError && vaultEncryptedFiles && vaultEncryptedFiles.length > 0) {
-        console.log(`Found ${vaultEncryptedFiles.length} files using vault encryption that need updating`);
-        updatedFilesCount = vaultEncryptedFiles.length;
-        
-        const storageClient = serviceClient || supabase;
-        
-        // Process each file encrypted with the vault key
-        for (const file of vaultEncryptedFiles) {
-          try {
-            console.log(`Re-encrypting file: ${file.file_name} (${file.file_id})`);
-            updatedFileNames.push(file.file_name);
-            
-            // Step 1: Download the encrypted file from storage
-            console.log(`Downloading file ${file.file_id} for re-encryption`);
-            const { data: encryptedFileData, error: downloadError } = await storageClient
-              .storage
-              .from(file.storage_bucket)
-              .download(file.storage_path);
-              
-            if (downloadError) {
-              console.error(`Error downloading file ${file.file_id}:`, downloadError);
-              // Skip this file but continue with others
-              continue;
-            }
-            
-            // Step 2: Convert to hex string for decryption
-            const encryptedHex = await blobToHexString(encryptedFileData);
-            
-            // Step 3: Decrypt with the old vault key
-            console.log(`Decrypting file ${file.file_id} with old vault key`);
-            try {
-              const decryptedData = decryptFile(encryptedHex, currentKey, file.iv);
-              
-              // Step 4: Re-encrypt with the new vault key
-              console.log(`Re-encrypting file ${file.file_id} with new vault key`);
-              const encryptionResult = encryptFile(decryptedData, newKey);
-              const newIv = encryptionResult.iv;
-              const newEncryptedData = encryptionResult.encryptedData;
-              
-              console.log('Encryption result for vault file:', {
-                fileId: file.file_id,
-                newIvLength: newIv.length,
-                newIvFormat: typeof newIv,
-                newIv: newIv, // Log the actual IV for debugging
-                hasEncryptedData: !!newEncryptedData
-              });
-              
-              // Validate and fix IV if needed
-              let finalIv = newIv;
-              if (!finalIv || typeof finalIv !== 'string' || finalIv.length !== 32) {
-                console.error(`Invalid IV format for file ${file.file_id}:`, {
-                  iv: finalIv,
-                  type: typeof finalIv,
-                  length: finalIv?.length
-                });
-                // Create a valid IV if the generated one is invalid
-                finalIv = crypto.randomBytes(16).toString('hex');
-                console.log(`Created new valid IV for file ${file.file_id}:`, finalIv);
-              }
-              
-              // Verification step: Try to decrypt with the new key to ensure everything is working
-              try {
-                console.log(`Verifying new encryption for file ${file.file_id}`);
-                const testDecrypt = decryptFile(newEncryptedData, newKey, finalIv);
-                console.log(`Verification successful - file ${file.file_id} can be decrypted with new key`);
-              } catch (verifyError) {
-                console.error(`Verification failed for file ${file.file_id}:`, verifyError);
-                // Skip this file but continue with others
-                continue;
-              }
-              
-              // Step 5: Upload the re-encrypted file back to storage
-              console.log(`Uploading re-encrypted file ${file.file_id} to storage`);
-              const { error: uploadError } = await storageClient
-                .storage
-                .from(file.storage_bucket)
-                .upload(file.storage_path, Buffer.from(newEncryptedData, 'hex'), {
-                  contentType: 'application/octet-stream',
-                  upsert: true // Overwrite existing file
-                });
-                
-              if (uploadError) {
-                console.error(`Error uploading re-encrypted file ${file.file_id}:`, uploadError);
-                // Skip updating database if storage upload failed
-                continue;
-              }
-              
-              // Step 6: Update the file record with new IV
-              const { error: fileUpdateError } = await supabase
-                .from('files')
-                .update({
-                  iv: finalIv,  // Use the validated IV
-                  updated_at: new Date().toISOString() // Consistently use updated_at
-                })
-                .eq('file_id', file.file_id);
-              
-              if (fileUpdateError) {
-                console.error(`Error updating file record for ${file.file_id}:`, fileUpdateError);
-              } else {
-                console.log(`Successfully re-encrypted and updated file: ${file.file_name}`);
-              }
-              
-            } catch (decryptError) {
-              console.error(`Error processing file ${file.file_id}:`, decryptError);
-              // Continue with other files even if this one fails
-            }
-            
-            // Log activity for the file update
-            await logActivity(
-              userId,
-              'FILE_KEY_UPDATE',
-              `Updated encryption for vault-encrypted file: ${file.file_name}`,
-              vaultId,
-              file.file_id,
-              req
-            );
-          } catch (fileError) {
-            console.error(`Error processing vault-encrypted file ${file.file_id}:`, fileError);
-            // Continue with other files even if this one fails
-          }
-        }
-      } else if (filesQueryError) {
-        console.error('Error finding vault-encrypted files:', filesQueryError);
-        // Continue anyway, as the vault key was updated successfully
+      let encryptedFilesCount = 0;
+      
+      if (!filesQueryError && vaultEncryptedFiles) {
+        encryptedFilesCount = vaultEncryptedFiles.length || 0;
+        console.log(`Found ${encryptedFilesCount} files using vault encryption (will remain with old key)`);
       }
       
       // Log the activity
@@ -2360,8 +2303,10 @@ router.post('/vaults/:vaultId/change-key', async (req, res) => {
         message: 'Vault key changed successfully',
         vaultName: vault.vault_name,
         vaultId: vault.vault_id || vaultId,
-        filesUpdated: updatedFilesCount,
-        updatedFiles: updatedFileNames
+        note: encryptedFilesCount > 0 ? 
+          `You have ${encryptedFilesCount} files encrypted with the previous vault key. To access these files, you'll need to use the original vault key that was active when they were uploaded.` : 
+          null,
+        filesCount: encryptedFilesCount
       });
     } catch (bcryptError) {
       console.error('Bcrypt operation failed:', bcryptError);
@@ -2401,7 +2346,7 @@ router.post('/files/:fileId/change-key', async (req, res) => {
       .select(`
         *,
         file_encryption_keys!file_encryption_keys_file_id_fkey(key_id, hashed_key),
-        vaults!inner(user_id, vault_key)
+        vaults!inner(user_id, vault_key, vault_name)
       `)
       .eq('file_id', fileId)
       .single();
@@ -2417,42 +2362,9 @@ router.post('/files/:fileId/change-key', async (req, res) => {
       return res.status(403).json({ error: 'You do not have permission to modify this file' });
     }
     
-    // Get the encryption key record
-    if (!file.file_encryption_keys || file.file_encryption_keys.length === 0) {
-      console.error('No encryption key found for file:', file.file_id);
-      return res.status(404).json({ error: 'Encryption key not found for this file' });
-    }
-    
-    // Store the file's key ID for later use
-    const fileKeyId = file.file_encryption_keys[0].key_id;
-    
-    // Step 1: Verify the current key based on encryption type
-    let isKeyValid = false;
-    
-    if (file.encryption_type === 'vault') {
-      // For vault-encrypted files, verify against the vault key
-      console.log('Verifying vault key for vault-encrypted file');
-      isKeyValid = await bcrypt.compare(currentKey, file.vaults.vault_key);
-      
-      if (!isKeyValid) {
-        console.error('Invalid vault key provided for file:', fileId);
-        return res.status(401).json({ error: 'Current vault key is incorrect' });
-      }
-      console.log('Vault key verified successfully, will switch to custom encryption');
-    } else {
-      // For custom-encrypted files, verify against the file's encryption key
-      console.log('Verifying custom encryption key');
-      isKeyValid = await bcrypt.compare(currentKey, file.file_encryption_keys[0].hashed_key);
-      
-      if (!isKeyValid) {
-        console.error('Invalid encryption key provided for file:', fileId);
-        return res.status(401).json({ error: 'Current encryption key is incorrect' });
-      }
-      console.log('Custom encryption key verified successfully');
-    }
-    
+    // Step 1: Attempt direct decryption without verifying keys first
+    // This approach will work regardless of encryption type and supports using old vault keys
     try {
-      // Step 2: Download and decrypt the file with current key
       console.log('Downloading encrypted file for re-encryption');
       const storageClient = serviceClient || supabase;
       const { data: encryptedFileData, error: downloadError } = await storageClient
@@ -2468,11 +2380,26 @@ router.post('/files/:fileId/change-key', async (req, res) => {
       // Convert Blob to hex string for decryption
       const encryptedHex = await blobToHexString(encryptedFileData);
       
-      // Decrypt with the current key
-      console.log('Decrypting file with current key');
+      // Log useful information for debugging
+      console.log('Decryption attempt details:', {
+        fileId: fileId,
+        fileName: file.file_name,
+        encryptionType: file.encryption_type,
+        ivValue: file.iv,
+        ivLength: file.iv?.length,
+        hasEncryptedData: !!encryptedHex,
+        encryptedDataLength: encryptedHex?.length,
+        keyProvided: !!currentKey
+      });
+      
+      // Decrypt with the current key directly
+      console.log('Attempting decryption with provided key');
       const decryptedData = decryptFile(encryptedHex, currentKey, file.iv);
       
-      // Step 3: Re-encrypt with the new key
+      // If we get here, decryption was successful - continue with re-encryption
+      console.log('Decryption successful, proceeding with re-encryption');
+      
+      // Step 2: Re-encrypt with the new key
       console.log('Re-encrypting file with new key');
       const encryptionResult = encryptFile(decryptedData, newKey);
       const newIv = encryptionResult.iv;
@@ -2481,26 +2408,24 @@ router.post('/files/:fileId/change-key', async (req, res) => {
       console.log('Encryption result:', {
         newIvLength: newIv.length,
         newIvFormat: typeof newIv,
-        newIv: newIv, // Log the actual IV value for debugging
         hasEncryptedData: !!newEncryptedData,
         encryptedDataLength: newEncryptedData.length
       });
       
       // Validate IV format before proceeding
-      if (!newIv || typeof newIv !== 'string' || newIv.length !== 32) {
+      let finalIv = newIv;
+      if (!finalIv || typeof finalIv !== 'string' || finalIv.length !== 32) {
         console.error('Invalid IV format generated:', {
-          iv: newIv,
-          type: typeof newIv,
-          length: newIv?.length
+          iv: finalIv,
+          type: typeof finalIv,
+          length: finalIv?.length
         });
-        // If IV is invalid, create a valid one and use it instead
-        const validIv = crypto.randomBytes(16).toString('hex');
-        console.log('Created new valid IV:', validIv);
-        // Replace the invalid IV with the valid one
-        newIv = validIv;
+        // Create a valid IV if needed
+        finalIv = crypto.randomBytes(16).toString('hex');
+        console.log('Created new valid IV:', finalIv);
       }
       
-      // Step 4: Upload the re-encrypted file back to storage
+      // Step 3: Upload the re-encrypted file back to storage
       console.log('Uploading re-encrypted file to storage');
       const { error: uploadError } = await storageClient
         .storage
@@ -2515,170 +2440,126 @@ router.post('/files/:fileId/change-key', async (req, res) => {
         return res.status(500).json({ error: 'Failed to store re-encrypted file' });
       }
       
-      // Verification step: Try to decrypt with the new key to ensure everything is working
-      try {
-        console.log('Verifying new encryption by test decryption');
-        const testDecrypt = decryptFile(newEncryptedData, newKey, newIv);
-        console.log('Verification successful - file can be decrypted with new key');
-      } catch (verifyError) {
-        console.error('Verification failed - file cannot be decrypted with new key:', verifyError);
-        return res.status(500).json({ 
-          error: 'Encryption verification failed', 
-          details: 'The file was encrypted but cannot be decrypted with the new key. Please try again.' 
-        });
-      }
-      
-      // Step 5: Hash the new key
+      // Step 4: Hash the new key for storage
       const saltRounds = 10;
       const hashedNewKey = await bcrypt.hash(newKey, saltRounds);
       
-      // Step 6: Update the database records
-      let fileUpdateData = {
-        iv: newIv,  // Always update the IV
-        updated_at: new Date().toISOString() // Use updated_at as that's the column in Supabase
+      // Step 5: Determine if we're changing encryption type
+      let newEncryptionType = file.encryption_type;
+      let changeMessage;
+      
+      if (file.encryption_type === 'vault') {
+        // If changing from vault to custom key
+        newEncryptionType = 'custom';
+        changeMessage = `Changed file encryption from vault key to custom key: ${file.file_name}`;
+      } else {
+        // If just changing a custom key
+        changeMessage = `Changed encryption key for file: ${file.file_name}`;
+      }
+      
+      // Step 6: Update file record with new IV and possibly encryption type
+      console.log('Updating file metadata');
+      let updatedFile;
+      
+      const fileUpdateData = {
+        iv: finalIv,
+        updated_at: new Date().toISOString()
       };
       
-      // If switching from vault to custom encryption, update the encryption type
-      if (file.encryption_type === 'vault') {
-        fileUpdateData.encryption_type = 'custom';
+      // Add encryption_type only if it's changing
+      if (newEncryptionType !== file.encryption_type) {
+        fileUpdateData.encryption_type = newEncryptionType;
       }
       
-      console.log('Updating file metadata with:', {
-        fileId: fileId,
-        ivLength: newIv.length,
-        hasNewIv: !!newIv,
-        updateFields: Object.keys(fileUpdateData),
-        encryptionTypeChange: file.encryption_type === 'vault',
-        newEncryptionType: fileUpdateData.encryption_type || file.encryption_type 
-      });
-      
-      // Update the file record with more detailed error handling
-      let updatedFile;
-      try {
-        // First, get the schema columns to ensure we only update fields that exist
-        const { data: schemaInfo, error: schemaError } = await supabase
-          .from('files')
-          .select()
-          .limit(1);
-          
-        if (schemaError) {
-          console.error('Error getting schema:', schemaError);
-        } else if (schemaInfo && schemaInfo.length > 0) {
-          const sampleFile = schemaInfo[0];
-          console.log('File schema columns:', Object.keys(sampleFile));
-          
-          // Remove any fields that don't exist in the schema
-          Object.keys(fileUpdateData).forEach(key => {
-            if (!(key in sampleFile)) {
-              console.log(`Removing field '${key}' as it doesn't exist in schema`);
-              delete fileUpdateData[key];
-            }
-          });
-        }
-        
-        const { data: fileData, error: fileUpdateError } = await supabase
-          .from('files')
-          .update(fileUpdateData)
-          .eq('file_id', fileId)
-          .select()
-          .single();
-          
-        if (fileUpdateError) {
-          console.error('Error updating file metadata:', fileUpdateError);
-          console.error('Error details:', {
-            status: fileUpdateError.status,
-            code: fileUpdateError.code,
-            message: fileUpdateError.message,
-            details: fileUpdateError.details,
-            hint: fileUpdateError.hint || 'No hint provided'
-          });
-          
-          // Try updating fields one by one as a fallback
-          console.log('Attempting alternative update approach...');
-          
-          // First update the timestamp
-          const { error: timeUpdateError } = await supabase
-            .from('files')
-            .update({ updated_at: new Date().toISOString() })
-            .eq('file_id', fileId);
-            
-          if (timeUpdateError) {
-            console.error('Failed to update timestamp:', timeUpdateError);
-          }
-          
-          // Then try to update IV separately - this is the most important field
-          const { error: ivUpdateError } = await supabase
-            .from('files')
-            .update({ iv: newIv })
-            .eq('file_id', fileId);
-            
-          if (ivUpdateError) {
-            console.error('Failed to update IV:', ivUpdateError);
-            return res.status(500).json({ 
-              error: 'Failed to update file IV', 
-              details: 'The encryption was successful, but metadata could not be updated. Re-uploading the file could resolve this issue.' 
-            });
-          }
-          
-          // If switching encryption type, do that separately too
-          if (file.encryption_type === 'vault') {
-            const { error: typeUpdateError } = await supabase
-              .from('files')
-              .update({ encryption_type: 'custom' })
-              .eq('file_id', fileId);
-              
-            if (typeUpdateError) {
-              console.error('Failed to update encryption type:', typeUpdateError);
-            }
-          }
-          
-          // Load the updated file record
-          const { data: reloadedFile } = await supabase
-            .from('files')
-            .select('*')
-            .eq('file_id', fileId)
-            .single();
-            
-          // Continue with the updated record or original file as fallback
-          updatedFile = reloadedFile || file;
-        } else {
-          updatedFile = fileData;
-        }
-      } catch (updateError) {
-        console.error('Error updating file metadata:', updateError);
-        return res.status(500).json({ error: 'Failed to update file metadata', details: updateError.message });
-      }
-      
-      // Update the encryption key record
-      const { data: updatedKey, error: updateError } = await supabase
-        .from('file_encryption_keys')
-        .update({ hashed_key: hashedNewKey })
-        .eq('key_id', fileKeyId)
+      const { data: fileData, error: fileUpdateError } = await supabase
+        .from('files')
+        .update(fileUpdateData)
         .eq('file_id', fileId)
         .select()
         .single();
         
-      if (updateError) {
-        console.error('Error updating file encryption key:', updateError);
-        return res.status(500).json({ error: 'Failed to update file encryption key' });
+      if (fileUpdateError) {
+        console.error('Error updating file metadata:', fileUpdateError);
+        
+        // Try updating fields one by one as a fallback
+        console.log('Attempting alternative update approach...');
+        
+        // First update the IV - this is most important
+        const { error: ivUpdateError } = await supabase
+          .from('files')
+          .update({ iv: finalIv })
+          .eq('file_id', fileId);
+          
+        if (ivUpdateError) {
+          console.error('Failed to update IV:', ivUpdateError);
+          return res.status(500).json({ 
+            error: 'Failed to update file IV', 
+            details: 'The encryption was successful, but metadata could not be updated completely.'
+          });
+        }
+        
+        // Update other fields separately
+        await supabase
+          .from('files')
+          .update({ 
+            updated_at: new Date().toISOString(),
+            encryption_type: newEncryptionType 
+          })
+          .eq('file_id', fileId);
+          
+        // Get the updated file
+        const { data: reloadedFile } = await supabase
+          .from('files')
+          .select('*')
+          .eq('file_id', fileId)
+          .single();
+          
+        updatedFile = reloadedFile || file;
+      } else {
+        updatedFile = fileData;
       }
       
-      // Step 7: Log the activity with appropriate message
-      const activityMessage = file.encryption_type === 'vault' 
-        ? `Changed file encryption from vault key to custom key: ${file.file_name}`
-        : `Changed encryption key for file: ${file.file_name}`;
+      // Step 7: If file is using custom encryption, update the key record
+      if (file.file_encryption_keys && file.file_encryption_keys.length > 0) {
+        // Update existing key record
+        const fileKeyId = file.file_encryption_keys[0].key_id;
         
+        const { error: keyUpdateError } = await supabase
+          .from('file_encryption_keys')
+          .update({ hashed_key: hashedNewKey })
+          .eq('key_id', fileKeyId)
+          .eq('file_id', fileId);
+          
+        if (keyUpdateError) {
+          console.error('Error updating existing key record:', keyUpdateError);
+        }
+      } else if (newEncryptionType === 'custom') {
+        // Create new key record if switching to custom
+        const { error: newKeyError } = await supabase
+          .from('file_encryption_keys')
+          .insert({
+            file_id: fileId,
+            hashed_key: hashedNewKey,
+            created_at: new Date().toISOString()
+          });
+          
+        if (newKeyError) {
+          console.error('Error creating new key record:', newKeyError);
+        }
+      }
+      
+      // Step 8: Log the activity
       await logActivity(
         userId,
         'FILE_KEY_CHANGE',
-        activityMessage,
+        changeMessage,
         file.vault_id,
         fileId,
         req
       );
       
-      // Step 8: Return appropriate response
-      const successMessage = file.encryption_type === 'vault'
+      // Step 9: Return appropriate response
+      const successMessage = newEncryptionType !== file.encryption_type
         ? 'File encryption changed from vault key to custom key successfully'
         : 'File encryption key changed successfully';
         
@@ -2687,18 +2568,267 @@ router.post('/files/:fileId/change-key', async (req, res) => {
         file: {
           fileName: file.file_name,
           fileId: file.file_id,
-          encryptionType: file.encryption_type === 'vault' ? 'custom' : file.encryption_type,
-          updatedAt: updatedFile ? updatedFile.last_updated : new Date().toISOString()
+          encryptionType: newEncryptionType,
+          vaultName: file.vaults.vault_name,
+          updatedAt: updatedFile ? updatedFile.updated_at : new Date().toISOString()
         }
       });
-    } catch (cryptoError) {
-      console.error('Encryption/decryption operation failed:', cryptoError);
-      return res.status(500).json({ error: 'Encryption operation failed', details: cryptoError.message });
+      
+    } catch (decryptError) {
+      // If decryption fails, the key is invalid
+      console.error('Decryption with provided key failed:', decryptError);
+      
+      let errorMessage = 'Invalid decryption key';
+      let errorDetails = 'The key provided cannot decrypt this file.';
+      
+      // Check if this might be a vault key change issue
+      if (file.encryption_type === 'vault' && 
+          (decryptError.code === 'ERR_OSSL_BAD_DECRYPT' || 
+          (decryptError.message && decryptError.message.includes('bad decrypt')))) {
+            
+        errorMessage = 'Invalid vault key';
+        errorDetails = 'If the vault key has been changed, please use the original key that was active when this file was uploaded.';
+      }
+      
+      return res.status(401).json({ 
+        error: errorMessage, 
+        details: errorDetails,
+        fileId: fileId,
+        fileName: file.file_name,
+        encryptionType: file.encryption_type
+      });
     }
   } catch (err) {
     console.error('File key change error:', err);
     console.error('Error stack:', err.stack);
     res.status(500).json({ error: 'Failed to change file encryption key', details: err.message });
+  }
+});
+
+// Activity Log Routes
+router.post('/activities', async (req, res) => {
+  const { userId, actionType, details, vaultId, fileId } = req.body;
+  
+  try {
+    if (!userId || !actionType || !details) {
+      return res.status(400).json({ error: 'Missing required fields' });
+    }
+    
+    const result = await logActivity(userId, actionType, details, vaultId, fileId, req);
+    
+    res.status(201).json({ 
+      message: 'Activity logged successfully', 
+      logId: result.log_id 
+    });
+  } catch (err) {
+    console.error('Activity logging error:', err);
+    res.status(500).json({ error: 'Failed to log activity' });
+  }
+});
+
+// Get activities for a user with pagination
+router.get('/activities/:userId', async (req, res) => {
+  const { userId } = req.params;
+  const page = parseInt(req.query.page) || 1;
+  const limit = parseInt(req.query.limit) || 10;
+  
+  try {
+    if (!userId) {
+      return res.status(400).json({ error: 'User ID is required' });
+    }
+    
+    const activities = await getActivities(userId, page, limit);
+    res.json(activities);
+  } catch (err) {
+    console.error('Activity fetch error:', err);
+    res.status(500).json({ error: 'Failed to fetch activities' });
+  }
+});
+
+// Search activities with filters
+router.post('/activities/search/:userId', async (req, res) => {
+  const { userId } = req.params;
+  const { searchTerm, filters, page, limit } = req.body;
+  
+  try {
+    if (!userId) {
+      return res.status(400).json({ error: 'User ID is required' });
+    }
+    
+    const pageNum = parseInt(page) || 1;
+    const limitNum = parseInt(limit) || 10;
+    
+    const activities = await searchActivities(userId, searchTerm, filters, pageNum, limitNum);
+    res.json(activities);
+  } catch (err) {
+    console.error('Activity search error:', err);
+    res.status(500).json({ error: 'Failed to search activities' });
+  }
+});
+
+// Export activities with filters
+router.post('/activities/export/:userId', async (req, res) => {
+  const { userId } = req.params;
+  const { filters = {}, format = 'csv' } = req.body;
+  
+  if (!userId) {
+    return res.status(400).json({ error: 'User ID is required' });
+  }
+  
+  try {
+    // Query to fetch activities based on filters
+    let query = supabase
+      .from('activity_logs')
+      .select(`
+        log_id,
+        action_type,
+        description,
+        vault_id,
+        file_id,
+        ip_address,
+        user_agent,
+        created_at,
+        vaults:vault_id(vault_name),
+        files:file_id(file_name,file_type,file_size)
+      `)
+      .eq('user_id', userId);
+    
+    // Apply filters if provided
+    if (filters.actionType) {
+      query = query.eq('action_type', filters.actionType);
+    }
+    
+    if (filters.startDate) {
+      query = query.gte('created_at', filters.startDate);
+    }
+    
+    if (filters.endDate) {
+      // Add 23:59:59 to include the entire end date
+      const endDateWithTime = new Date(filters.endDate);
+      endDateWithTime.setHours(23, 59, 59, 999);
+      query = query.lte('created_at', endDateWithTime.toISOString());
+    }
+    
+    // Order by created_at in descending order
+    query = query.order('created_at', { ascending: false });
+    
+    // Execute the query
+    const { data: activities, error } = await query;
+    
+    if (error) {
+      console.error('Error fetching activities for export:', error);
+      return res.status(500).json({ error: 'Failed to fetch activities' });
+    }
+    
+    // Format the activities data
+    const formattedActivities = activities.map(activity => {
+      // Extract vault and file information
+      const vault_name = activity.vaults?.vault_name || null;
+      const file_name = activity.files?.file_name || null;
+      const file_type = activity.files?.file_type || null;
+      
+      // Create a formatted details field
+      let details = activity.description || '';
+      if (file_name) {
+        details += ` | File: ${file_name}`;
+        if (file_type) {
+          details += ` (${file_type.toUpperCase()})`;
+        }
+      }
+      if (vault_name) {
+        details += ` | Vault: ${vault_name}`;
+      }
+      
+      return {
+        id: activity.log_id,
+        action_type: activity.action_type,
+        description: activity.description,
+        details: details,
+        timestamp: new Date(activity.created_at).toLocaleString(),
+        ip_address: activity.ip_address,
+        user_agent: activity.user_agent,
+        vault_name,
+        file_name,
+        file_type
+      };
+    });
+    
+    // Handle different export formats
+    if (format.toLowerCase() === 'csv') {
+      // Format as CSV
+      const csvRows = [];
+      
+      // Add headers
+      const headers = ['ID', 'Action Type', 'Timestamp', 'Details', 'IP Address', 'User Agent', 'Vault', 'File'];
+      csvRows.push(headers.join(','));
+      
+      // Add data rows
+      formattedActivities.forEach(activity => {
+        // Escape quotes in details to prevent CSV formatting issues
+        const escapedDetails = activity.details.replace(/"/g, '""');
+        
+        const row = [
+          activity.id,
+          activity.action_type,
+          activity.timestamp,
+          `"${escapedDetails}"`, // Wrap in quotes to handle commas in details
+          activity.ip_address || '',
+          activity.user_agent || '',
+          activity.vault_name || '',
+          activity.file_name || ''
+        ];
+        
+        csvRows.push(row.join(','));
+      });
+      
+      const csvContent = csvRows.join('\n');
+      
+      // Set headers for CSV download
+      res.setHeader('Content-Type', 'text/csv');
+      res.setHeader('Content-Disposition', 'attachment; filename=activity_logs.csv');
+      
+      return res.send(csvContent);
+    } else if (format.toLowerCase() === 'excel') {
+      // For Excel format, we'll use XLSX content type
+      // The data structure is still CSV, but it will be recognized as Excel file
+      const xlsxRows = [];
+      
+      // Add headers
+      const headers = ['ID', 'Action Type', 'Timestamp', 'Details', 'IP Address', 'User Agent', 'Vault', 'File'];
+      xlsxRows.push(headers.join(','));
+      
+      // Add data rows
+      formattedActivities.forEach(activity => {
+        // Escape quotes in details to prevent formatting issues
+        const escapedDetails = activity.details.replace(/"/g, '""');
+        
+        const row = [
+          activity.id,
+          activity.action_type,
+          activity.timestamp,
+          `"${escapedDetails}"`, // Wrap in quotes to handle commas in details
+          activity.ip_address || '',
+          activity.user_agent || '',
+          activity.vault_name || '',
+          activity.file_name || ''
+        ];
+        
+        xlsxRows.push(row.join(','));
+      });
+      
+      const xlsxContent = xlsxRows.join('\n');
+      
+      // Set headers for Excel download
+      res.setHeader('Content-Type', 'application/vnd.ms-excel');
+      res.setHeader('Content-Disposition', 'attachment; filename=activity_logs.xls');
+      
+      return res.send(xlsxContent);
+    } else {
+      return res.status(400).json({ error: 'Unsupported export format. Supported formats: csv, excel' });
+    }
+  } catch (err) {
+    console.error('Error exporting activities:', err);
+    return res.status(500).json({ error: 'Failed to export activities', details: err.message });
   }
 });
 
