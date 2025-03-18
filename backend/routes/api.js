@@ -80,36 +80,6 @@ router.get('/test', (req, res) => {
   res.json({ message: 'Backend is connected!' });
 });
 
-// test database connection routes
-router.get('/test-db', async (req, res) => {
-  try {
-    // Test database connection
-    const testQuery = await db.query('SELECT NOW()');
-    console.log('Database connection successful');
-
-    // Test userRegistration table
-    const userTableQuery = await db.query(`
-      SELECT column_name, data_type 
-      FROM information_schema.columns 
-      WHERE table_name = 'userregistration'
-    `);
-    
-    res.json({
-      status: 'success',
-      dbConnected: true,
-      timestamp: testQuery.rows[0].now,
-      userTableColumns: userTableQuery.rows
-    });
-  } catch (err) {
-    console.error('Database test error:', err);
-    res.status(500).json({
-      status: 'error',
-      error: err.message,
-      details: 'Database connection or query failed'
-    });
-  }
-});
-
 // signup auth route
 router.post('/auth/signup',
   [
@@ -1420,7 +1390,7 @@ router.post('/file/decrypt', async (req, res) => {
       if (decryptError.code === 'ERR_OSSL_BAD_DECRYPT' || 
           (decryptError.message && decryptError.message.includes('bad decrypt'))) {
         if (!vaultKeyChanged) {
-          errorMessage = 'Invalid decryption key or file format error. The file encryption may be corrupted.';
+        errorMessage = 'Invalid decryption key or file format error. The file encryption may be corrupted.';
           errorCode = 'DECRYPT_ERROR';
         }
         needsRepair = true;
@@ -2039,73 +2009,6 @@ router.get('/diagnostics/storage', async (req, res) => {
   }
 });
 
-// Test route for Supabase storage permissions
-router.get('/test-storage-upload', async (req, res) => {
-  try {
-    const testContent = Buffer.from('This is a test file');
-    const testPath = 'test-upload.txt';
-    
-    // First try with regular client
-    try {
-      const { data: regularData, error: regularError } = await supabase
-        .storage
-        .from('securefiles')
-        .upload(testPath, testContent, { upsert: true });
-        
-      if (regularError) {
-        console.log('Regular client upload failed:', regularError);
-      } else {
-        console.log('Regular client upload succeeded:', regularData);
-        
-        // Clean up
-        await supabase.storage.from('securefiles').remove([testPath]);
-        return res.json({ success: true, client: 'regular' });
-      }
-    } catch (err) {
-      console.error('Regular client error:', err);
-    }
-    
-    // Test with service role if available
-    if (serviceClient) {
-      try {
-        const { data: serviceData, error: serviceError } = await serviceClient
-          .storage
-          .from('securefiles')
-          .upload(testPath, testContent, { upsert: true });
-          
-        if (serviceError) {
-          console.log('Service client upload failed:', serviceError);
-          return res.status(500).json({
-            success: false,
-            error: serviceError,
-            message: 'Both regular and service client uploads failed'
-          });
-        } else {
-          console.log('Service client upload succeeded:', serviceData);
-          
-          // Clean up
-          await serviceClient.storage.from('securefiles').remove([testPath]);
-          return res.json({ success: true, client: 'service' });
-        }
-      } catch (err) {
-        console.error('Service client error:', err);
-        return res.status(500).json({
-          success: false,
-          error: err.message,
-          message: 'Both clients failed with errors'
-        });
-      }
-    } else {
-      return res.status(500).json({
-        success: false,
-        message: 'No service client available - make sure SUPABASE_SERVICE_ROLE_KEY is set in .env'
-      });
-    }
-  } catch (err) {
-    console.error('Test upload error:', err);
-    res.status(500).json({ success: false, error: err.message });
-  }
-});
 
 // Change password route
 router.post('/auth/change-password', async (req, res) => {
@@ -2270,7 +2173,7 @@ router.post('/vaults/:vaultId/change-key', async (req, res) => {
         
       if (updateError) {
         console.error('Vault key update error:', updateError);
-        return res.status(500).json({ error: 'Failed to update vault key in database', details: updateError.message });
+          return res.status(500).json({ error: 'Failed to update vault key in database', details: updateError.message });
       }
       
       console.log('Vault key updated successfully for vault:', vaultId);
@@ -2469,54 +2372,54 @@ router.post('/files/:fileId/change-key', async (req, res) => {
       // Add encryption_type only if it's changing
       if (newEncryptionType !== file.encryption_type) {
         fileUpdateData.encryption_type = newEncryptionType;
-      }
-      
-      const { data: fileData, error: fileUpdateError } = await supabase
-        .from('files')
-        .update(fileUpdateData)
-        .eq('file_id', fileId)
-        .select()
-        .single();
-        
-      if (fileUpdateError) {
-        console.error('Error updating file metadata:', fileUpdateError);
-        
-        // Try updating fields one by one as a fallback
-        console.log('Attempting alternative update approach...');
-        
-        // First update the IV - this is most important
-        const { error: ivUpdateError } = await supabase
-          .from('files')
-          .update({ iv: finalIv })
-          .eq('file_id', fileId);
-          
-        if (ivUpdateError) {
-          console.error('Failed to update IV:', ivUpdateError);
-          return res.status(500).json({ 
-            error: 'Failed to update file IV', 
-            details: 'The encryption was successful, but metadata could not be updated completely.'
-          });
         }
         
+        const { data: fileData, error: fileUpdateError } = await supabase
+          .from('files')
+          .update(fileUpdateData)
+          .eq('file_id', fileId)
+          .select()
+          .single();
+          
+        if (fileUpdateError) {
+          console.error('Error updating file metadata:', fileUpdateError);
+          
+          // Try updating fields one by one as a fallback
+          console.log('Attempting alternative update approach...');
+          
+        // First update the IV - this is most important
+          const { error: ivUpdateError } = await supabase
+            .from('files')
+          .update({ iv: finalIv })
+            .eq('file_id', fileId);
+            
+          if (ivUpdateError) {
+            console.error('Failed to update IV:', ivUpdateError);
+            return res.status(500).json({ 
+              error: 'Failed to update file IV', 
+            details: 'The encryption was successful, but metadata could not be updated completely.'
+            });
+          }
+          
         // Update other fields separately
         await supabase
-          .from('files')
+              .from('files')
           .update({ 
             updated_at: new Date().toISOString(),
             encryption_type: newEncryptionType 
           })
-          .eq('file_id', fileId);
-          
+              .eq('file_id', fileId);
+              
         // Get the updated file
-        const { data: reloadedFile } = await supabase
-          .from('files')
-          .select('*')
-          .eq('file_id', fileId)
-          .single();
-          
-        updatedFile = reloadedFile || file;
-      } else {
-        updatedFile = fileData;
+          const { data: reloadedFile } = await supabase
+            .from('files')
+            .select('*')
+            .eq('file_id', fileId)
+            .single();
+            
+          updatedFile = reloadedFile || file;
+        } else {
+          updatedFile = fileData;
       }
       
       // Step 7: If file is using custom encryption, update the key record
@@ -2525,9 +2428,9 @@ router.post('/files/:fileId/change-key', async (req, res) => {
         const fileKeyId = file.file_encryption_keys[0].key_id;
         
         const { error: keyUpdateError } = await supabase
-          .from('file_encryption_keys')
-          .update({ hashed_key: hashedNewKey })
-          .eq('key_id', fileKeyId)
+        .from('file_encryption_keys')
+        .update({ hashed_key: hashedNewKey })
+        .eq('key_id', fileKeyId)
           .eq('file_id', fileId);
           
         if (keyUpdateError) {
