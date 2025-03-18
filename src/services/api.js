@@ -1,6 +1,6 @@
 import axios from 'axios';
 
-const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:5001/api';
+const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:5000/api';
 const API_TIMEOUT = process.env.REACT_APP_API_TIMEOUT || 30000;
 
 // Log API configuration for debugging
@@ -30,6 +30,7 @@ export const testBackendConnection = async () => {
 
 // signup route
 export const signUp = async (userData) => {
+  // check if userData is valid
   try {
     console.log('Attempting signup with:', { 
       email: userData.email,
@@ -147,16 +148,60 @@ export const fetchUserVaults = async (userId) => {
   }
 };
 
+// Verify vault key before deletion
+export const verifyVaultDelete = async (vaultId, vaultKey) => {
+  try {
+    // Get userId from localStorage
+    const userData = JSON.parse(localStorage.getItem('userData'));
+    if (!userData || !userData.userId) {
+      throw new Error('User ID not found');
+    }
+
+    const response = await api.post('/vault/verify-delete', {
+      vault_id: vaultId,
+      vault_key: vaultKey,
+      user_id: userData.userId
+    });
+
+    console.log('Vault key verification successful:', response.data);
+    return response.data;
+  } catch (error) {
+    console.error('Vault key verification error:', error);
+    throw new Error(error.response?.data?.error || 'Failed to verify vault key');
+  }
+};
+
 export const deleteVault = async (vaultId, userId) => {
   try {
-    console.log('Deleting vault:', vaultId, 'for user:', userId);
-    const response = await api.delete(`/vaults/${vaultId}`, {
-      data: { userId }
+    // Validate parameters
+    if (!vaultId) {
+      throw new Error('Vault ID is required');
+    }
+    if (!userId) {
+      throw new Error('User ID is required');
+    }
+
+    console.log('Deleting vault:', {
+      vaultId,
+      userId,
+      requestUrl: `${API_URL}/vaults/${vaultId}`
     });
+    
+    const response = await api.delete(`/vaults/${vaultId}`, {
+      data: { 
+        userId: userId, 
+        user_id: userId // Include both formats to be safe
+      }
+    });
+    
     console.log('Vault deleted successfully:', response.data);
     return response.data;
   } catch (error) {
-    console.error('Delete vault error:', error.response?.data || error.message);
+    console.error('Delete vault error:', {
+      message: error.message,
+      responseData: error.response?.data,
+      status: error.response?.status
+    });
     throw error.response?.data?.error || 'Failed to delete vault';
   }
 };
@@ -199,7 +244,7 @@ export const uploadFile = async (formData, onProgress) => {
       contentType: formData.get('file')?.type
     });
 
-    const response = await axios.post('http://localhost:5001/api/file/upload', formData, {
+    const response = await axios.post(`${API_URL}/file/upload`, formData, {
       headers: {
         'Content-Type': 'multipart/form-data'
       },
@@ -224,16 +269,7 @@ export const uploadFile = async (formData, onProgress) => {
       statusText: error.response?.statusText
     });
     
-    // Throw a more descriptive error
-    if (error.response?.data?.error) {
-      throw new Error(error.response.data.error);
-    } else if (error.response?.data?.details) {
-      throw new Error(error.response.data.details);
-    } else if (error.message) {
-      throw new Error(`Upload failed: ${error.message}`);
-    } else {
-      throw new Error('Failed to upload file');
-    }
+    throw new Error(error.response?.data?.details || error.message || 'Failed to upload file');
   }
 };
 
@@ -241,6 +277,15 @@ export const fetchFiles = async (vaultId) => {
   try {
     console.log('Fetching files for vault:', vaultId);
     const response = await api.get(`/files/${vaultId}`);
+    
+    // Ensure encryption_type is available in file data
+    if (response.data && response.data.files) {
+      response.data.files = response.data.files.map(file => ({
+        ...file,
+        encryption_type: file.encryption_type || 'custom' // Default to custom if missing
+      }));
+    }
+    
     console.log('API response:', response.data);
     return response.data;
   } catch (error) {
@@ -413,14 +458,28 @@ export const changePassword = async (email, currentPassword, newPassword, userId
 
 export const changeVaultKey = async (vaultId, currentKey, newKey, userId) => {
   try {
+    console.log(`Sending vault key change request for vault: ${vaultId}`);
+    
     const response = await api.post(`/vaults/${vaultId}/change-key`, {
       currentKey,
       newKey,
       userId
     });
+    
+    console.log('Vault key change response:', response.data);
     return response.data;
   } catch (error) {
-    throw error.response?.data?.error || 'Failed to change vault key';
+    console.error('Vault key change API error:', {
+      status: error.response?.status,
+      data: error.response?.data,
+      message: error.message
+    });
+    
+    // Try to extract a detailed error message from the response
+    const errorDetails = error.response?.data?.details || '';
+    const errorMessage = error.response?.data?.error || 'Failed to change vault key';
+    
+    throw new Error(errorDetails ? `${errorMessage}: ${errorDetails}` : errorMessage);
   }
 };
 
@@ -437,30 +496,38 @@ export async function fetchUserFiles(userId) {
   }
 }
 
-export async function changeFileKey(fileId, currentKey, newKey, userId) {
+export const changeFileKey = async (fileId, currentKey, newKey) => {
   try {
-    const response = await fetch(`/api/files/${fileId}/change-key`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        currentKey,
-        newKey,
-        userId,
-      }),
-    });
-
-    if (!response.ok) {
-      const data = await response.json();
-      throw new Error(data.error || 'Failed to change file key');
+    console.log(`Sending file key change request for file: ${fileId}`);
+    
+    // Get userId from localStorage
+    const userData = JSON.parse(localStorage.getItem('userData'));
+    if (!userData || !userData.userId) {
+      throw new Error('User ID not found. Please log in again.');
     }
-
-    return await response.json();
-  } catch (err) {
-    throw new Error(err.message || 'Failed to change file key');
+    
+    const response = await api.post(`/files/${fileId}/change-key`, {
+      currentKey,
+      newKey,
+      userId: userData.userId
+    });
+    
+    console.log('File key change response:', response.data);
+    return response.data;
+  } catch (error) {
+    console.error('File key change API error:', {
+      status: error.response?.status,
+      data: error.response?.data,
+      message: error.message
+    });
+    
+    // Try to extract a detailed error message from the response
+    const errorDetails = error.response?.data?.details || '';
+    const errorMessage = error.response?.data?.error || 'Failed to change file encryption key';
+    
+    throw new Error(errorDetails ? `${errorMessage}: ${errorDetails}` : errorMessage);
   }
-}
+};
 
 // Get user activities
 export const fetchActivities = async (page = 1, limit = 10) => {

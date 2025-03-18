@@ -1,5 +1,3 @@
-// src/components/features/vault/VaultManager/VaultTable.jsx
-
 import React, { useState } from "react";
 import {
   Table,
@@ -17,13 +15,14 @@ import {
   DialogActions,
   Button,
   Typography,
-  TextField
+  TextField,
+  Alert
 } from "@mui/material";
 import FolderIcon from "@mui/icons-material/Folder";
 import LockIcon from "@mui/icons-material/Lock";
 import DeleteIcon from "@mui/icons-material/Delete";
 import { useNavigate } from "react-router-dom";
-import { deleteVault, verifyVaultKey } from "../../../../services/api";
+import { deleteVault, verifyVaultKey, verifyVaultDelete } from "../../../../services/api";
 
 export default function VaultTable({ vaults = [], onVaultDeleted }) {
   const navigate = useNavigate();
@@ -31,17 +30,25 @@ export default function VaultTable({ vaults = [], onVaultDeleted }) {
   const [vaultToDelete, setVaultToDelete] = useState(null);
   const [isDeleting, setIsDeleting] = useState(false);
   
-  // Add new state for key verification
+  // state for key verification
   const [keyVerificationOpen, setKeyVerificationOpen] = useState(false);
   const [selectedVault, setSelectedVault] = useState(null);
   const [vaultKey, setVaultKey] = useState('');
   const [verifying, setVerifying] = useState(false);
   const [verificationError, setVerificationError] = useState('');
 
-  // Add these new states after the existing ones
+  // state for failed attempts
   const [failedAttempts, setFailedAttempts] = useState(0);
   const [showUserVerification, setShowUserVerification] = useState(false);
   const [userCredentials, setUserCredentials] = useState({ email: '', password: '' });
+
+  // state for vault deletion verification
+  const [deleteVerificationOpen, setDeleteVerificationOpen] = useState(false);
+  const [deleteKey, setDeleteKey] = useState('');
+  const [isVerifying, setIsVerifying] = useState(false);
+  const [deleteError, setDeleteError] = useState('');
+  const [isVerified, setIsVerified] = useState(false);
+  const [verifiedVaultInfo, setVerifiedVaultInfo] = useState(null);
 
   const handleVaultClick = (vault) => {
     setSelectedVault(vault);
@@ -109,11 +116,38 @@ export default function VaultTable({ vaults = [], onVaultDeleted }) {
   const handleDeleteClick = (e, vault) => {
     e.stopPropagation();
     setVaultToDelete(vault);
-    setDeleteDialogOpen(true);
+    setDeleteKey('');
+    setDeleteError('');
+    setIsVerified(false);
+    setVerifiedVaultInfo(null);
+    setDeleteVerificationOpen(true);
+  };
+
+  const handleDeleteKeyVerification = async () => {
+    if (!vaultToDelete || !deleteKey) return;
+
+    setIsVerifying(true);
+    setDeleteError('');
+
+    try {
+      // Verify the vault key using the new API endpoint
+      const result = await verifyVaultDelete(vaultToDelete.id, deleteKey);
+      
+      // Store the verified vault info for the confirmation dialog
+      setVerifiedVaultInfo(result.vault);
+      setIsVerified(true);
+      setDeleteVerificationOpen(false);
+      setDeleteDialogOpen(true);
+    } catch (error) {
+      console.error('Verification error:', error);
+      setDeleteError(error.message || 'Invalid vault key. Please try again.');
+    } finally {
+      setIsVerifying(false);
+    }
   };
 
   const handleDeleteConfirm = async () => {
-    if (!vaultToDelete) return;
+    if (!vaultToDelete || !verifiedVaultInfo) return;
 
     setIsDeleting(true);
     try {
@@ -121,10 +155,10 @@ export default function VaultTable({ vaults = [], onVaultDeleted }) {
       if (!userData || !userData.userId) {
         throw new Error('User not authenticated');
       }
-      await deleteVault(vaultToDelete.vault_id || vaultToDelete.id, userData.userId);
+      await deleteVault(vaultToDelete.id, userData.userId);
       setDeleteDialogOpen(false);
       if (onVaultDeleted) {
-        onVaultDeleted(vaultToDelete.vault_id || vaultToDelete.id);
+        onVaultDeleted(vaultToDelete.id);
       }
     } catch (error) {
       console.error('Failed to delete vault:', error);
@@ -132,6 +166,8 @@ export default function VaultTable({ vaults = [], onVaultDeleted }) {
     } finally {
       setIsDeleting(false);
       setVaultToDelete(null);
+      setVerifiedVaultInfo(null);
+      setIsVerified(false);
     }
   };
 
@@ -308,31 +344,79 @@ export default function VaultTable({ vaults = [], onVaultDeleted }) {
         </DialogActions>
       </Dialog>
 
+      {/* Delete Key Verification Dialog */}
+      <Dialog
+        open={deleteVerificationOpen}
+        onClose={() => !isVerifying && setDeleteVerificationOpen(false)}
+      >
+        <DialogTitle>Verify Vault Key</DialogTitle>
+        <DialogContent>
+          <Typography gutterBottom sx={{ mb: 2 }}>
+            To delete vault "{vaultToDelete?.name}", please enter your vault key for verification.
+          </Typography>
+          <TextField
+            autoFocus
+            margin="dense"
+            label="Vault Key"
+            type="password"
+            fullWidth
+            value={deleteKey}
+            onChange={(e) => setDeleteKey(e.target.value)}
+            disabled={isVerifying}
+            error={!!deleteError}
+            helperText={deleteError}
+          />
+        </DialogContent>
+        <DialogActions>
+          <Button 
+            onClick={() => setDeleteVerificationOpen(false)}
+            disabled={isVerifying}
+          >
+            Cancel
+          </Button>
+          <Button
+            onClick={handleDeleteKeyVerification}
+            color="primary"
+            disabled={isVerifying || !deleteKey}
+          >
+            {isVerifying ? 'Verifying...' : 'Verify'}
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* Delete Confirmation Dialog */}
       <Dialog
         open={deleteDialogOpen}
         onClose={() => !isDeleting && setDeleteDialogOpen(false)}
       >
-        <DialogTitle sx={{ pb: 1 }}>Delete Vault</DialogTitle>
+        <DialogTitle>Confirm Vault Deletion</DialogTitle>
         <DialogContent>
-          <Typography>
-            Are you sure you want to delete the vault "{vaultToDelete?.name}"? 
-            This action cannot be undone and all files in this vault will be permanently deleted.
+          <Alert severity="warning" sx={{ mb: 2 }}>
+            This action cannot be undone.
+          </Alert>
+          <Typography gutterBottom>
+            Are you sure you want to delete vault "{verifiedVaultInfo?.vault_name}"?
           </Typography>
+          {verifiedVaultInfo?.fileCount > 0 && (
+            <Typography color="error" sx={{ mt: 2 }}>
+              Warning: This vault contains {verifiedVaultInfo.fileCount} file(s). 
+              All files stored in this vault will be permanently deleted.
+            </Typography>
+          )}
         </DialogContent>
-        <DialogActions sx={{ p: 2, pt: 1 }}>
+        <DialogActions>
           <Button 
-            onClick={() => setDeleteDialogOpen(false)} 
+            onClick={() => setDeleteDialogOpen(false)}
             disabled={isDeleting}
           >
             Cancel
           </Button>
-          <Button 
+          <Button
             onClick={handleDeleteConfirm}
             color="error"
-            variant="contained"
             disabled={isDeleting}
           >
-            {isDeleting ? 'Deleting...' : 'Delete'}
+            {isDeleting ? 'Deleting...' : 'Delete Vault'}
           </Button>
         </DialogActions>
       </Dialog>

@@ -251,9 +251,48 @@
   }
   
   .vault-item.selected {
-    background-color: #000;
-    color: white;
-    border-color: #000;
+    background-color: #f0f7ff;
+    border-color: #007bff;
+    border-left: 4px solid #007bff;
+    font-weight: bold;
+  }
+  
+  .vault-item-details {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+  
+  .vault-item-name {
+    font-weight: 500;
+  }
+  
+  .vault-item-info {
+    font-size: 0.8rem;
+    color: #666;
+    margin-top: 4px;
+  }
+  
+  .key-management-instructions {
+    background-color: #f8f9fa;
+    border-radius: 4px;
+    padding: 10px;
+    margin-bottom: 15px;
+    font-size: 0.9rem;
+    color: #555;
+  }
+  
+  .key-management-warning {
+    color: #dc3545;
+    font-weight: bold;
+    margin-top: 5px;
+  }
+  
+  .vault-selection-prompt {
+    text-align: center;
+    padding: 20px;
+    color: #666;
+    font-style: italic;
   }
   
   /* File Key Manager Styles */
@@ -270,46 +309,58 @@
   }
   
   .file-item {
-    padding: 1rem;
-    border: 1px solid #e0e0e0;
+    padding: 0.75rem 1rem;
+    border: 1px solid #ddd;
     border-radius: 4px;
     margin-bottom: 0.5rem;
     cursor: pointer;
-    transition: all 0.2s ease;
-    display: flex;
-    justify-content: space-between;
-    align-items: flex-start;
+    transition: all 0.2s;
   }
   
   .file-item:hover {
     background-color: #f5f5f5;
-    border-color: #bdbdbd;
   }
   
   .file-item.selected {
-    background-color: #e3f2fd;
-    border-color: #2196f3;
+    background-color: #f0f7ff;
+    border-color: #007bff;
+    border-left: 4px solid #007bff;
   }
   
-  .file-item .file-name {
-    display: block;
+  .file-item-name {
     font-weight: 500;
-    margin-bottom: 0.25rem;
-    color: #333;
+    display: flex;
+    align-items: center;
   }
   
-  .file-item .file-info {
-    display: block;
-    font-size: 0.875rem;
-    color: #757575;
+  .file-item-info {
+    font-size: 0.8rem;
+    color: #666;
+    margin-top: 4px;
   }
   
-  .file-item .file-vault {
-    font-size: 0.875rem;
-    color: #616161;
-    background-color: #f5f5f5;
-    padding: 0.25rem 0.5rem;
+  .file-selection-prompt {
+    text-align: center;
+    padding: 20px;
+    color: #666;
+    font-style: italic;
+  }
+  
+  /* Improved scrollbars for file and vault lists */
+  .vaults-list::-webkit-scrollbar,
+  .files-list::-webkit-scrollbar {
+    width: 8px;
+  }
+  
+  .vaults-list::-webkit-scrollbar-thumb,
+  .files-list::-webkit-scrollbar-thumb {
+    background-color: #ccc;
     border-radius: 4px;
+  }
+  
+  .vaults-list::-webkit-scrollbar-track,
+  .files-list::-webkit-scrollbar-track {
+    background-color: #f5f5f5;
   }
   
   .info-message {
@@ -441,5 +492,54 @@
     font-size: 0.9rem;
     line-height: 1.5;
     margin: 0;
+  }
+  
+  .encryption-badge {
+    display: inline-block;
+    margin-left: 4px;
+    font-weight: 500;
+    padding: 1px 5px;
+    border-radius: 3px;
+    transition: background-color 0.3s, color 0.3s;
+  }
+  
+  .encryption-badge.vault {
+    background-color: #e3f2fd;
+    color: #1976d2;
+  }
+  
+  .encryption-badge.custom {
+    background-color: #e8f5e9;
+    color: #2e7d32;
+  }
+  
+  .file-item.updated {
+    animation: highlight-update 2s ease-in-out;
+  }
+  
+  @keyframes highlight-update {
+    0% { background-color: rgba(33, 150, 243, 0.1); }
+    50% { background-color: rgba(33, 150, 243, 0.2); }
+    100% { background-color: transparent; }
+  }
+  
+  .vault-key-info {
+    background-color: #e3f2fd;
+    border: 1px solid #bbdefb;
+    border-radius: 4px;
+    padding: 10px;
+    margin-top: 10px;
+    font-size: 0.9rem;
+    color: #1976d2;
+  }
+  
+  .custom-key-info {
+    background-color: #e8f5e9;
+    border: 1px solid #c8e6c9;
+    border-radius: 4px;
+    padding: 10px;
+    margin-top: 10px;
+    font-size: 0.9rem;
+    color: #2e7d32;
   }
   

@@ -63,6 +63,13 @@ export default function UploadSection({ vaultId, onFileUploaded }) {
       }
       formData.append('vault_id', vaultId);
       
+      // Get user data from localStorage
+      const userData = JSON.parse(localStorage.getItem('userData'));
+      if (!userData || !userData.userId) {
+        throw new Error('User ID not found. Please log in again.');
+      }
+      formData.append('user_id', userData.userId);
+      
       let key;
       if (useVaultKey) {
         const vaultData = JSON.parse(localStorage.getItem('currentVault'));
@@ -82,6 +89,7 @@ export default function UploadSection({ vaultId, onFileUploaded }) {
         fileName: selectedFile.name,
         fileSize: selectedFile.size,
         vaultId,
+        userId: userData.userId,
         useVaultKey,
         hasKey: !!key,
         keyLength: key ? key.length : 0

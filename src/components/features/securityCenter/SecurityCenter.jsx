@@ -88,6 +88,7 @@ export default function SecurityCenter() {
         passwordChangeDate: result.passwordChangeDate
       };
       localStorage.setItem('userData', JSON.stringify(updatedUserData));
+      setUserData(updatedUserData);
       
       // Reset form
       setFormData({
