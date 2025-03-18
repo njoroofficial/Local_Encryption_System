@@ -69,26 +69,24 @@ export async function searchActivities(userId, searchTerm = '', filters = {}, pa
  * Export activities with filters
  * @param {string} userId - The ID of the user
  * @param {Object} filters - Filters object
- * @param {string} format - Export format (csv or excel)
+ * @param {string} format - Export format (csv only)
  * @returns {Blob} - Blob containing exported data
  */
 export async function exportActivities(userId, filters = {}, format = 'csv') {
     try {
         const response = await api.post(`/activities/export/${userId}`, {
             filters,
-            format
+            format: 'csv' // Always use CSV format
         }, {
             responseType: 'blob' // Important for file downloads
         });
         
         // Create a download link
-        const blob = new Blob([response.data], { 
-            type: format === 'csv' ? 'text/csv' : 'application/vnd.ms-excel' 
-        });
+        const blob = new Blob([response.data], { type: 'text/csv' });
         
         // Create a filename with date
         const date = new Date().toISOString().split('T')[0];
-        const filename = `activity_logs_${date}.${format}`;
+        const filename = `activity_logs_${date}.csv`;
         
         // Create download link and trigger download
         const url = window.URL.createObjectURL(blob);

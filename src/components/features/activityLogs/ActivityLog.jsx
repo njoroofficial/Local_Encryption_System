@@ -410,9 +410,9 @@ const ActivityLog = ({ userId }) => {
     setExportLoading(true);
     
     try {
-      await exportActivities(userId, exportFilters, exportFormat);
+      await exportActivities(userId, exportFilters, 'csv');
       
-      setSnackbarMessage(`Activity logs exported successfully as ${exportFormat.toUpperCase()}`);
+      setSnackbarMessage(`Activity logs exported successfully as CSV`);
       setSnackbarSeverity('success');
       setSnackbarOpen(true);
       setShowExportDialog(false);
@@ -685,23 +685,9 @@ const ActivityLog = ({ userId }) => {
           <Dialog open={showExportDialog} onClose={handleExportClose}>
             <DialogTitle>Export Activity Logs</DialogTitle>
             <DialogContent sx={{ minWidth: 400 }}>
-              <Box sx={{ mt: 2 }}>
-                <Typography variant="subtitle1" gutterBottom>
-                  Export Format
-                </Typography>
-                <RadioGroup
-                  value={exportFormat}
-                  onChange={(e) => setExportFormat(e.target.value)}
-                  row
-                >
-                  <FormControlLabel value="csv" control={<Radio />} label="CSV" />
-                  <FormControlLabel value="excel" control={<Radio />} label="Excel" />
-                </RadioGroup>
-              </Box>
-              
               <Box sx={{ mt: 3 }}>
                 <Typography variant="subtitle1" gutterBottom>
-                  Filter Logs
+                  Filter Logs for Export
                 </Typography>
                 <FormControl fullWidth margin="normal">
                   <InputLabel>Action Type</InputLabel>
@@ -746,7 +732,7 @@ const ActivityLog = ({ userId }) => {
                 disabled={exportLoading}
                 startIcon={exportLoading ? <CircularProgress size={20} /> : <FileDownloadIcon />}
               >
-                {exportLoading ? 'Exporting...' : 'Export'}
+                {exportLoading ? 'Exporting...' : 'Export as CSV'}
               </Button>
             </DialogActions>
           </Dialog>

@@ -2788,43 +2788,8 @@ router.post('/activities/export/:userId', async (req, res) => {
       res.setHeader('Content-Disposition', 'attachment; filename=activity_logs.csv');
       
       return res.send(csvContent);
-    } else if (format.toLowerCase() === 'excel') {
-      // For Excel format, we'll use XLSX content type
-      // The data structure is still CSV, but it will be recognized as Excel file
-      const xlsxRows = [];
-      
-      // Add headers
-      const headers = ['ID', 'Action Type', 'Timestamp', 'Details', 'IP Address', 'User Agent', 'Vault', 'File'];
-      xlsxRows.push(headers.join(','));
-      
-      // Add data rows
-      formattedActivities.forEach(activity => {
-        // Escape quotes in details to prevent formatting issues
-        const escapedDetails = activity.details.replace(/"/g, '""');
-        
-        const row = [
-          activity.id,
-          activity.action_type,
-          activity.timestamp,
-          `"${escapedDetails}"`, // Wrap in quotes to handle commas in details
-          activity.ip_address || '',
-          activity.user_agent || '',
-          activity.vault_name || '',
-          activity.file_name || ''
-        ];
-        
-        xlsxRows.push(row.join(','));
-      });
-      
-      const xlsxContent = xlsxRows.join('\n');
-      
-      // Set headers for Excel download
-      res.setHeader('Content-Type', 'application/vnd.ms-excel');
-      res.setHeader('Content-Disposition', 'attachment; filename=activity_logs.xls');
-      
-      return res.send(xlsxContent);
     } else {
-      return res.status(400).json({ error: 'Unsupported export format. Supported formats: csv, excel' });
+      return res.status(400).json({ error: 'Unsupported export format. Only CSV format is supported.' });
     }
   } catch (err) {
     console.error('Error exporting activities:', err);
