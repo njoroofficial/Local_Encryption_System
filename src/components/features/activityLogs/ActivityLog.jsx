@@ -120,125 +120,19 @@ const ActivityLog = ({ userId }) => {
       setLoading(true);
       setError(null);
       
-      // Check if search term matches any action label, apply as action type filter if it does
+      // Apply filters only
       const searchFilters = { ...filters };
-      const searchTermLower = searchTerm.toLowerCase();
-      let exactActionMatch = false;
-      
-      
-      // Look for exact action label matches first
-      const actionEntry = Object.entries(ACTION_LABELS).find(([key, label]) => 
-        label.toLowerCase() === searchTermLower
-      );
-      
-      // If no exact match, look for partial matches (action label contains search term)
-      const partialMatches = !actionEntry && searchTermLower.length > 2 
-        ? Object.entries(ACTION_LABELS).filter(([key, label]) => 
-            label.toLowerCase().includes(searchTermLower)
-          )
-        : [];
-      
-      if (actionEntry) {
-        // If search term exactly matches an action label, apply it as an action type filter
-        searchFilters.actionType = actionEntry[0];
-        exactActionMatch = true;
-        
-        // Update applied filters to show the action filter chip
-        const actionFilterExists = appliedFilters.some(f => f.type === 'action');
-        
-        if (!actionFilterExists) {
-          const newFilters = [...appliedFilters];
-          newFilters.push({
-            type: 'action',
-            value: ACTION_LABELS[actionEntry[0]]
-          });
-          setAppliedFilters(newFilters);
-        } else {
-          // Update existing action filter
-          const newFilters = appliedFilters.map(f => {
-            if (f.type === 'action') {
-              return { 
-                type: 'action', 
-                value: ACTION_LABELS[actionEntry[0]]
-              };
-            }
-            return f;
-          });
-          setAppliedFilters(newFilters);
-        }
-        
-        // If we've applied an exact action match, clear the search term for the API call
-        const apiSearchTerm = exactActionMatch ? '' : searchTerm;
-        const data = await searchActivities(userId, apiSearchTerm, searchFilters, page, 10);
-        console.log('Search results:', data);
-        setActivities(data.activities || []);
-        setTotalPages(data.totalPages || 1);
-      } else if (partialMatches.length === 1) {
-        // If there's exactly one partial match, use it (similar to "did you mean?")
-        const matchedAction = partialMatches[0];
-        searchFilters.actionType = matchedAction[0];
-        
-        
-        // Update applied filters to show the action filter chip
-        const actionFilterExists = appliedFilters.some(f => f.type === 'action');
-        
-        if (!actionFilterExists) {
-          const newFilters = [...appliedFilters];
-          newFilters.push({
-            type: 'action',
-            value: ACTION_LABELS[matchedAction[0]]
-          });
-          setAppliedFilters(newFilters);
-        } else {
-          // Update existing action filter
-          const newFilters = appliedFilters.map(f => {
-            if (f.type === 'action') {
-              return { 
-                type: 'action', 
-                value: ACTION_LABELS[matchedAction[0]]
-              };
-            }
-            return f;
-          });
-          setAppliedFilters(newFilters);
-        }
-        
-        // Show feedback about the partial match by updating the search term
-        setSearchTerm(ACTION_LABELS[matchedAction[0]]);
-        
-        // Clear the search term for the API call as we're using the action type filter
-        const data = await searchActivities(userId, '', searchFilters, page, 10);
-        console.log('Search results (partial match):', data);
-        setActivities(data.activities || []);
-        setTotalPages(data.totalPages || 1);
-      } else if (partialMatches.length > 1) {
-        // Multiple partial matches, show suggestions and search normally
-        const suggestions = partialMatches.map(([key, label]) => ({
-          key,
-          label
-        }));
-        setMatchingSuggestions(suggestions);
-        setShowSuggestions(true);
-        
-        // Continue with normal search
-        const data = await searchActivities(userId, searchTerm, filters, page, 10);
-        console.log('Search results (multiple partial matches):', data);
-        setActivities(data.activities || []);
-        setTotalPages(data.totalPages || 1);
-      } else {
-        // Multiple partial matches or no matches, search normally
-        const data = await searchActivities(userId, searchTerm, filters, page, 10);
-        console.log('Search results (normal):', data);
-        setActivities(data.activities || []);
-        setTotalPages(data.totalPages || 1);
-      }
+      const data = await searchActivities(userId, '', searchFilters, page, 10);
+      console.log('Search results:', data);
+      setActivities(data.activities || []);
+      setTotalPages(data.totalPages || 1);
     } catch (err) {
       console.error('Error searching activities:', err);
       setError(err.message || 'Failed to search activities');
     } finally {
       setLoading(false);
     }
-  }, [userId, searchTerm, filters, page, appliedFilters]);
+  }, [userId, filters, page]);
 
   const handleFilterApply = () => {
     const newFilters = [];
@@ -443,60 +337,18 @@ const ActivityLog = ({ userId }) => {
           </Box>
 
           <Box className="search-filter-container" sx={{ mb: 2, display: 'flex', gap: 2 }}>
-            <Autocomplete
-              className="search-field"
-              freeSolo
-              options={actionOptions}
-              getOptionLabel={(option) => typeof option === 'string' ? option : option.label}
-              inputValue={searchTerm}
-              onInputChange={(event, newValue) => {
-                setSearchTerm(newValue);
-                // Clear suggestions when search term is cleared
-                if (!newValue || newValue.trim() === '') {
-                  setShowSuggestions(false);
-                  setMatchingSuggestions([]);
-                }
-              }}
-              onChange={(event, newValue) => {
-                if (newValue && typeof newValue !== 'string') {
-                  // If user selects an action from dropdown
-                  setSearchTerm(newValue.label);
-                  setShowSuggestions(false);
-                  setMatchingSuggestions([]);
-                  // Automatically trigger search after selection
-                  setTimeout(() => handleSearch(), 0);
-                }
-              }}
-              renderInput={(params) => (
-                <TextField
-                  {...params}
-                  placeholder="Search activities or select an action..."
-                  onKeyPress={(e) => {
-                    if (e.key === 'Enter') {
-                      handleSearch();
-                    }
-                  }}
-                  InputProps={{
-                    ...params.InputProps,
-                    startAdornment: (
-                      <InputAdornment position="start">
-                        <SearchIcon />
-                      </InputAdornment>
-                    )
-                  }}
-                />
-              )}
-              sx={{ flexGrow: 1 }}
-            />
+            <Box sx={{ flexGrow: 1, display: 'flex', alignItems: 'center' }}>
+              <Typography variant="body1" fontWeight="medium">
+                {loading ? (
+                  <CircularProgress size={20} sx={{ mr: 1 }} />
+                ) : (
+                  <Tooltip title="Total activities in current view">
+                    <span>{activities.length} {activities.length === 1 ? 'activity' : 'activities'} {appliedFilters.length > 0 ? '(filtered)' : ''}</span>
+                  </Tooltip>
+                )}
+              </Typography>
+            </Box>
             <Box className="button-group" sx={{ display: 'flex', gap: 1 }}>
-              <Button
-                variant="contained"
-                color="primary"
-                startIcon={<SearchIcon />}
-                onClick={handleSearch}
-              >
-                Search
-              </Button>
               <Button
                 variant="outlined"
                 startIcon={<FilterListIcon />}
