@@ -58,7 +58,7 @@ export const signUp = async (userData) => {
     } else if (error.request) {
       // The request was made but no response was received
       console.error('No response received from server');
-      throw 'Signup failed: No response from server. Check if backend is running.';
+      throw new Error('Signup failed: No response from server. Check if backend is running.');
     } else {
       // Something happened in setting up the request that triggered an Error
       console.error('Error setting up request:', error.message);
@@ -298,7 +298,7 @@ export const fetchFiles = async (vaultId) => {
 };
 
 // File decryption route
-export const decryptFile = async (fileId, decryptionKey) => {
+export const decryptFile = async (fileId, decryptionKey, isDownload = false) => {
   try {
     // Get userId from localStorage
     const userData = JSON.parse(localStorage.getItem('userData'));
@@ -309,7 +309,8 @@ export const decryptFile = async (fileId, decryptionKey) => {
     const response = await api.post('/file/decrypt', {
       file_id: fileId,
       decryption_key: decryptionKey,
-      user_id: userData.userId
+      user_id: userData.userId,
+      is_download: isDownload // Add flag to indicate if this is a download operation
     }, {
       responseType: 'blob'
     });
@@ -319,6 +320,16 @@ export const decryptFile = async (fileId, decryptionKey) => {
       const text = await response.data.text();
       const error = JSON.parse(text);
       throw new Error(error.error || 'Failed to decrypt file');
+    }
+    
+    // If this is a download operation, log it separately
+    if (isDownload) {
+      try {
+        await logFileDownload(fileId);
+      } catch (logError) {
+        console.error('Failed to log download activity:', logError);
+        // Continue anyway as the download was successful
+      }
     }
 
     return response.data;
@@ -336,6 +347,38 @@ export const decryptFile = async (fileId, decryptionKey) => {
   }
 };
 
+// Log file download activity
+export const logFileDownload = async (fileId) => {
+  try {
+    // Get userId from localStorage
+    const userData = JSON.parse(localStorage.getItem('userData'));
+    if (!userData || !userData.userId) {
+      throw new Error('User ID not found');
+    }
+    
+    // Get file info - we need this to get the vault ID
+    const { data: files } = await api.get(`/files/${fileId}/info`);
+    const file = files.file;
+    
+    if (!file) {
+      throw new Error('File information not found');
+    }
+    
+    // Log the download activity
+    await api.post('/activities', {
+      userId: userData.userId,
+      actionType: 'FILE_DOWNLOAD',
+      details: `Downloaded file: ${file.fileName}`,
+      vaultId: file.vaultId,
+      fileId: fileId
+    });
+    
+    return true;
+  } catch (error) {
+    console.error('Error logging file download:', error);
+    throw error;
+  }
+};
 
 export const downloadFile = async (fileId, userId) => {
   try {

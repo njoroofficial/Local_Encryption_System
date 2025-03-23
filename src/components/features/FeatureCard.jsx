@@ -18,6 +18,9 @@ function FeatureCard(props) {
       case 3:
         navigate('/activity-log');
         break;
+      case 4:
+        navigate('/system-report');
+        break;
       default:
         console.log(id);
     }

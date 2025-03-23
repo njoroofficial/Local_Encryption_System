@@ -10,6 +10,7 @@ import SignUp from "./components/pages/SignUp";
 import ActivityLog from "./components/features/activityLogs/ActivityLog";
 import SecurityCenter from "./components/features/securityCenter/SecurityCenter";
 import EmailVerification from "./components/pages/EmailVerification";
+import SystemReport from "./components/features/systemReport/System_Report";
 
 // Protected Route component
 const ProtectedRoute = ({ children }) => {
@@ -116,6 +117,11 @@ function App() {
         <Route path="/activity-log" element={
           <ProtectedRoute>
             <ActivityLog userId={currentUserId} />
+          </ProtectedRoute>
+        } />
+        <Route path="/system-report" element={
+          <ProtectedRoute>
+            <SystemReport />
           </ProtectedRoute>
         } />
       </Routes>

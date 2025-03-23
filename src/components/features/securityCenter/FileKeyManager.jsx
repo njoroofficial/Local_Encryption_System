@@ -22,6 +22,7 @@ export default function FileKeyManager({ onClose }) {
     confirmNewKey: "",
   });
 
+  // eslint-disable-next-line no-unused-vars
   const [userData, setUserData] = useState(null);
   const [recentlyUpdated, setRecentlyUpdated] = useState(null);
 
@@ -226,25 +227,10 @@ export default function FileKeyManager({ onClose }) {
     return <KeyIcon style={{ marginRight: '4px', fontSize: '16px' }} />;
   };
 
+  // eslint-disable-next-line no-unused-vars
   const refreshFiles = async () => {
     if (selectedVault) {
-      setIsLoadingFiles(true);
-      try {
-        const response = await fetchFiles(selectedVault.id);
-        setFiles(response.files || []);
-        
-        // Maintain selection after refresh if the file still exists
-        if (selectedFile) {
-          const updatedSelectedFile = response.files?.find(f => f.fileId === selectedFile.fileId);
-          if (updatedSelectedFile) {
-            setSelectedFile(updatedSelectedFile);
-          }
-        }
-      } catch (err) {
-        console.error("Error refreshing files:", err);
-      } finally {
-        setIsLoadingFiles(false);
-      }
+      await loadFiles(selectedVault.id);
     }
   };
 

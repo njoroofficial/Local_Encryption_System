@@ -5,8 +5,8 @@
   "dependencies": {
     "@emotion/react": "^11.11.3",
     "@emotion/styled": "^11.11.0",
-    "@mui/icons-material": "^5.15.6",
-    "@mui/material": "^5.15.6",
+    "@mui/icons-material": "^5.15.7",
+    "@mui/material": "^5.15.7",
     "@supabase/supabase-js": "^2.49.1",
     "axios": "^1.8.3",
     "file-saver": "^2.0.5",
@@ -16,6 +16,7 @@
     "react-dom": "^18.2.0",
     "react-router-dom": "^6.21.3",
     "react-scripts": "5.0.1",
+    "recharts": "^2.15.1",
     "xlsx": "^0.18.5"
   },
   "scripts": {

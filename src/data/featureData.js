@@ -27,5 +27,11 @@ export const features = [
     content:
       "Monitor all activities related to your account, vaults and files. Search activities, filter activities, and more.",
     actionText: "View Activity Log",
+  },
+  {
+    title: "System Report",
+    description: "Get a comprehensive overview of your system",
+    content: "View system usage, security, and performance metrics.",
+    actionText: "View System Report"
   }
 ];

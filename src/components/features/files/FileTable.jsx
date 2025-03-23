@@ -146,7 +146,7 @@ export default function FileTable({ vaultId, refreshTrigger }) {
     try {
       // Handle download case
       if (downloadingFile === selectedFile.fileId) {
-        const response = await decryptFile(selectedFile.fileId, decryptionKey);
+        const response = await decryptFile(selectedFile.fileId, decryptionKey, true);
         
         // Create blob and trigger download
         const blob = new Blob([response], { type: getContentType(selectedFile.fileType) });
@@ -166,8 +166,8 @@ export default function FileTable({ vaultId, refreshTrigger }) {
         return;
       }
 
-      // Handle preview case
-      const response = await decryptFile(selectedFile.fileId, decryptionKey);
+      // Handle preview case (not a download)
+      const response = await decryptFile(selectedFile.fileId, decryptionKey, false);
       let blob;
 
       // Handle text files

@@ -96,6 +96,7 @@ export default function SignUp() {
         password: formData.password,
       };
       
+      // eslint-disable-next-line no-unused-vars
       const data = await signUp(userData);
       
       // Success case

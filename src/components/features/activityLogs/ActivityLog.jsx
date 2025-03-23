@@ -26,10 +26,6 @@ import {
   Tooltip,
   Pagination,
   Autocomplete,
-  FormControlLabel,
-  Radio,
-  RadioGroup,
-  IconButton,
   Alert,
   Snackbar
 } from '@mui/material';
@@ -44,7 +40,6 @@ import CloudDownloadIcon from '@mui/icons-material/CloudDownload';
 import VpnKeyIcon from '@mui/icons-material/VpnKey';
 import InfoIcon from '@mui/icons-material/Info';
 import LockOpenIcon from '@mui/icons-material/LockOpen';
-import DownloadIcon from '@mui/icons-material/Download';
 import FileDownloadIcon from '@mui/icons-material/FileDownload';
 import { getActivities, searchActivities, exportActivities } from '../../../services/activityLogService';
 import '../../../styles/activityLog.css';
@@ -54,14 +49,12 @@ const ACTION_LABELS = {
   VAULT_ACCESS: 'Vault Accessed',
   VAULT_DELETE: 'Vault Deleted',
   FILE_UPLOAD: 'File Upload',
-  FILE_PREVIEW: 'File Preview',
   FILE_DOWNLOAD: 'File Download',
   FILE_DELETE: 'File Delete',
   PASSWORD_CHANGE: 'Password Changed',
   VAULT_KEY_CHANGE: 'Vault Key Changed',
   FILE_KEY_CHANGE: 'File Key Changed',
   FILE_DECRYPT: 'File Decrypted',
-  FILE_REPAIR: 'File Repaired'
 };
 
 const ActivityLog = ({ userId }) => {
@@ -84,6 +77,7 @@ const ActivityLog = ({ userId }) => {
   
   // Export related states
   const [showExportDialog, setShowExportDialog] = useState(false);
+  // eslint-disable-next-line no-unused-vars
   const [exportFormat, setExportFormat] = useState('csv');
   const [exportFilters, setExportFilters] = useState({
     actionType: '',
