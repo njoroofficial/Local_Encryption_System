@@ -28,7 +28,6 @@ import {
   Legend,
   ResponsiveContainer
 } from 'recharts'
-import DownloadIcon from '@mui/icons-material/Download'
 import FileTextIcon from '@mui/icons-material/Description'
 import CalendarIcon from '@mui/icons-material/CalendarToday'
 import BarChart3Icon from '@mui/icons-material/BarChart'
@@ -460,11 +459,6 @@ export default function SystemReport() {
     });
   }
   
-  const handleDownloadCSV = () => {
-    // Logic to generate and download CSV
-    console.log('Downloading CSV data...')
-  }
-
   const handleTabChange = (event, newValue) => {
     setActiveTab(newValue);
   };

@@ -12,7 +12,6 @@ import {
   TableRow,
   Paper,
   Button,
-  InputAdornment,
   MenuItem,
   Chip,
   Dialog,
@@ -25,11 +24,9 @@ import {
   CircularProgress,
   Tooltip,
   Pagination,
-  Autocomplete,
   Alert,
   Snackbar
 } from '@mui/material';
-import SearchIcon from '@mui/icons-material/Search';
 import FilterListIcon from '@mui/icons-material/FilterList';
 import LockIcon from '@mui/icons-material/Lock';
 import DeleteIcon from '@mui/icons-material/Delete';
@@ -58,7 +55,6 @@ const ACTION_LABELS = {
 };
 
 const ActivityLog = ({ userId }) => {
-  const [searchTerm, setSearchTerm] = useState('');
   const [filters, setFilters] = useState({
     actionType: '',
     startDate: '',
@@ -71,9 +67,6 @@ const ActivityLog = ({ userId }) => {
   const [error, setError] = useState(null);
   const [page, setPage] = useState(1);
   const [totalPages, setTotalPages] = useState(1);
-  const [actionOptions, setActionOptions] = useState([]);
-  const [matchingSuggestions, setMatchingSuggestions] = useState([]);
-  const [showSuggestions, setShowSuggestions] = useState(false);
   
   // Export related states
   const [showExportDialog, setShowExportDialog] = useState(false);
@@ -88,15 +81,6 @@ const ActivityLog = ({ userId }) => {
   const [snackbarOpen, setSnackbarOpen] = useState(false);
   const [snackbarMessage, setSnackbarMessage] = useState('');
   const [snackbarSeverity, setSnackbarSeverity] = useState('success');
-
-  // Create action options for autocomplete
-  useEffect(() => {
-    const options = Object.entries(ACTION_LABELS).map(([key, label]) => ({
-      key,
-      label
-    }));
-    setActionOptions(options);
-  }, []);
   
   // Initialize export filters with current applied filters when opening export dialog
   useEffect(() => {
@@ -107,14 +91,11 @@ const ActivityLog = ({ userId }) => {
   }, [showExportDialog, filters]);
 
   const handleSearch = useCallback(async () => {
-    console.log('ActivityLog: handleSearch called with:', { userId, searchTerm, filters, page });
+    console.log('ActivityLog: handleSearch called with:', { userId, filters, page });
     if (!userId) {
       setError('User ID is required');
       return;
     }
-
-    // Clear previous suggestions
-    setShowSuggestions(false);
     
     try {
       setLoading(true);
@@ -185,7 +166,7 @@ const ActivityLog = ({ userId }) => {
       return;
     }
 
-    if (!searchTerm && !filters.actionType && !filters.startDate && !filters.endDate) {
+    if (!filters.actionType && !filters.startDate && !filters.endDate) {
       try {
         setLoading(true);
         setError(null);
@@ -203,7 +184,7 @@ const ActivityLog = ({ userId }) => {
     } else {
       handleSearch();
     }
-  }, [userId, page, searchTerm, filters, handleSearch]);
+  }, [userId, page, filters, handleSearch]);
 
   // Effect for initial load and userId changes
   useEffect(() => {
@@ -253,36 +234,6 @@ const ActivityLog = ({ userId }) => {
     }
   };
 
-  const handleSuggestionSelect = (suggestion) => {
-    setSearchTerm(suggestion.label);
-    setShowSuggestions(false);
-    
-    // Update filters
-    const newFilters = { ...filters, actionType: suggestion.key };
-    setFilters(newFilters);
-    
-    // Update applied filters chips
-    const actionFilterExists = appliedFilters.some(f => f.type === 'action');
-    if (!actionFilterExists) {
-      setAppliedFilters([...appliedFilters, {
-        type: 'action',
-        value: suggestion.label
-      }]);
-    } else {
-      setAppliedFilters(appliedFilters.map(f => {
-        if (f.type === 'action') {
-          return { type: 'action', value: suggestion.label };
-        }
-        return f;
-      }));
-    }
-    
-    // Trigger search with the selected action
-    setTimeout(() => {
-      handleSearch();
-    }, 0);
-  };
-  
   // Handle export dialog open
   const handleExportOpen = () => {
     setShowExportDialog(true);
@@ -378,26 +329,6 @@ const ActivityLog = ({ userId }) => {
                   variant="outlined"
                 />
               ))}
-            </Box>
-          )}
-
-          {showSuggestions && matchingSuggestions.length > 0 && (
-            <Box className="action-suggestions" sx={{ mb: 2 }}>
-              <Typography variant="subtitle2" sx={{ mb: 1 }}>
-                Did you mean one of these actions?
-              </Typography>
-              <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1 }}>
-                {matchingSuggestions.map((suggestion, index) => (
-                  <Chip
-                    key={index}
-                    label={suggestion.label}
-                    onClick={() => handleSuggestionSelect(suggestion)}
-                    color="primary"
-                    variant="outlined"
-                    clickable
-                  />
-                ))}
-              </Box>
             </Box>
           )}
 
