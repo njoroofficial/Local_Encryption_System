@@ -1,5 +1,5 @@
 // src/components/features/files/FileTable.jsx
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   Table,
   TableBody,
@@ -30,6 +30,7 @@ import LockIcon from '@mui/icons-material/Lock';
 import VisibilityIcon from '@mui/icons-material/Visibility';
 import { fetchFiles, decryptFile } from '../../../services/api';
 import FilePreview from './FilePreview';
+import SearchIcon from '@mui/icons-material/Search';
 
 // File type icons mapping
 const fileTypeIcons = {
@@ -41,7 +42,7 @@ const fileTypeIcons = {
   default: <InsertDriveFileIcon />
 };
 
-export default function FileTable({ vaultId, refreshTrigger }) {
+export default function FileTable({ vaultId, refreshTrigger, searchTerm = '' }) {
   const [files, setFiles] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -59,6 +60,21 @@ export default function FileTable({ vaultId, refreshTrigger }) {
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [fileToDelete, setFileToDelete] = useState(null);
   const [isDeleting, setIsDeleting] = useState(false);
+
+  // Filter files based on search term
+  const filteredFiles = useMemo(() => {
+    if (!searchTerm.trim()) {
+      return files;
+    }
+    
+    const lowercasedSearch = searchTerm.toLowerCase();
+    return files.filter(file => 
+      (file.fileName && file.fileName.toLowerCase().includes(lowercasedSearch)) ||
+      (file.fileType && file.fileType.toLowerCase().includes(lowercasedSearch)) ||
+      (file.uploadDate && file.uploadDate.toLowerCase().includes(lowercasedSearch)) ||
+      (file.fileSize && formatFileSize(file.fileSize).toLowerCase().includes(lowercasedSearch))
+    );
+  }, [files, searchTerm]);
 
   const loadFiles = useCallback(async () => {
     try {
@@ -108,6 +124,31 @@ export default function FileTable({ vaultId, refreshTrigger }) {
         </Typography>
         <Typography variant="body2" color="text.secondary">
           Upload files to get started
+        </Typography>
+      </Box>
+    );
+  }
+
+  if (filteredFiles.length === 0 && searchTerm.trim() !== '') {
+    return (
+      <Box
+        sx={{
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: 'center',
+          justifyContent: 'center',
+          py: 6,
+          backgroundColor: '#fff',
+          borderRadius: 1,
+          border: '1px solid #e0e0e0',
+        }}
+      >
+        <SearchIcon sx={{ fontSize: 60, color: '#9e9e9e', mb: 2 }} />
+        <Typography variant="h6" color="text.secondary" gutterBottom>
+          No matching files found
+        </Typography>
+        <Typography variant="body2" color="text.secondary">
+          Try a different search term
         </Typography>
       </Box>
     );
@@ -307,7 +348,7 @@ export default function FileTable({ vaultId, refreshTrigger }) {
             </TableRow>
           </TableHead>
           <TableBody>
-            {files.map((file) => (
+            {filteredFiles.map((file) => (
               <TableRow 
                 key={file.fileId}
                 onClick={() => handleFileClick(file)}

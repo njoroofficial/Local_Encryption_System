@@ -1,18 +1,16 @@
 import React, { useState, useEffect } from 'react';
-import { Box, Typography, Button } from '@mui/material';
+import { Box, Typography, Button, TextField, InputAdornment } from '@mui/material';
 import AddIcon from '@mui/icons-material/Add';
+import SearchIcon from '@mui/icons-material/Search';
 import VaultTable from './VaultTable';
 import { fetchUserVaults } from '../../../../services/api';
 import { useNavigate } from 'react-router-dom';
-import {
-  Card,
-  CardContent,
-  LinearProgress,
-} from "@mui/material";
 import "../../../../styles/managevault.css";
 
 export default function VaultManager() {
   const [vaults, setVaults] = useState([]);
+  const [filteredVaults, setFilteredVaults] = useState([]);
+  const [searchTerm, setSearchTerm] = useState('');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const navigate = useNavigate();
@@ -28,6 +26,7 @@ export default function VaultManager() {
 
         const response = await fetchUserVaults(userData.userId);
         setVaults(response.vaults || []);
+        setFilteredVaults(response.vaults || []);
       } catch (err) {
         setError(err.message || 'Failed to load vaults');
       } finally {
@@ -38,12 +37,34 @@ export default function VaultManager() {
     loadVaults();
   }, [navigate]);
 
+  useEffect(() => {
+    if (searchTerm.trim() === '') {
+      setFilteredVaults(vaults);
+    } else {
+      const lowercasedSearch = searchTerm.toLowerCase();
+      const filtered = vaults.filter((vault) => 
+        vault.name?.toLowerCase().includes(lowercasedSearch) || 
+        vault.description?.toLowerCase().includes(lowercasedSearch) ||
+        vault.location?.toLowerCase().includes(lowercasedSearch)
+      );
+      setFilteredVaults(filtered);
+    }
+  }, [searchTerm, vaults]);
+
   const handleCreateVault = () => {
     navigate('/create-vault');
   };
 
   const handleVaultDeleted = (deletedVaultId) => {
-    setVaults(prevVaults => prevVaults.filter(vault => vault.id !== deletedVaultId));
+    setVaults(prevVaults => {
+      const updated = prevVaults.filter(vault => vault.id !== deletedVaultId);
+      setFilteredVaults(updated);
+      return updated;
+    });
+  };
+
+  const handleSearchChange = (event) => {
+    setSearchTerm(event.target.value);
   };
 
   if (loading) return <div>Loading vaults...</div>;
@@ -60,36 +81,27 @@ export default function VaultManager() {
         </Typography>
       </header>
 
-      <Card sx={{ mt: 4, mb: 4 }}>
-        <CardContent>
-          <Typography variant="h6" sx={{ mb: 0.5 }}>
-            Storage Overview
-          </Typography>
-          <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-            Your vault storage usage
-          </Typography>
-          <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 1 }}>
-            <Typography variant="body2">
-              5.4 GB of 10 GB used
-            </Typography>
-            <Typography variant="body2" color="text.secondary">
-              54% used
-            </Typography>
-          </Box>
-          <LinearProgress 
-            variant="determinate" 
-            value={54} 
-            sx={{ 
-              height: 8, 
-              borderRadius: 4,
-              backgroundColor: '#f3f4f6',
-              '& .MuiLinearProgress-bar': {
-                backgroundColor: '#000'
-              }
-            }} 
-          />
-        </CardContent>
-      </Card>
+      <Box sx={{ mt: 4, mb: 4 }}>
+        <TextField
+          fullWidth
+          placeholder="Search vaults by name, description, or location"
+          value={searchTerm}
+          onChange={handleSearchChange}
+          InputProps={{
+            startAdornment: (
+              <InputAdornment position="start">
+                <SearchIcon />
+              </InputAdornment>
+            ),
+          }}
+          sx={{
+            '& .MuiOutlinedInput-root': {
+              borderRadius: '8px',
+              backgroundColor: '#f9fafb',
+            }
+          }}
+        />
+      </Box>
 
       <Box sx={{ 
         display: 'flex', 
@@ -113,7 +125,7 @@ export default function VaultManager() {
         </Button>
       </Box>
 
-      <VaultTable vaults={vaults} onVaultDeleted={handleVaultDeleted} />
+      <VaultTable vaults={filteredVaults} onVaultDeleted={handleVaultDeleted} />
     </div>
   );
 }

@@ -1,7 +1,8 @@
 // src/components/features/files/ManageFiles.jsx
 import React, { useEffect, useState, useCallback } from 'react';
 import { useParams } from 'react-router-dom';
-import { Box, Typography } from '@mui/material';
+import { Box, Typography, TextField, InputAdornment } from '@mui/material';
+import SearchIcon from '@mui/icons-material/Search';
 import UploadSection from './UploadSection';
 import FileTable from './FileTable';
 import '../../../styles/main.css';
@@ -11,6 +12,7 @@ function ManageFiles() {
   const [loading, setLoading] = useState(true);
   const [vaultName, setVaultName] = useState('');
   const [refreshTrigger, setRefreshTrigger] = useState(0);
+  const [searchTerm, setSearchTerm] = useState('');
 
   useEffect(() => {
     // Get the vault name from localStorage or state management
@@ -34,6 +36,10 @@ function ManageFiles() {
     setRefreshTrigger(prev => prev + 1);
   }, []);
 
+  const handleSearchChange = (event) => {
+    setSearchTerm(event.target.value);
+  };
+
   if (loading) return <div>Loading files...</div>;
 
   return (
@@ -47,8 +53,31 @@ function ManageFiles() {
           <p className="manage-files-subtitle">
             Upload, download, and organize your encrypted files
           </p>
+          
+          <Box sx={{ mb: 3, mt: 3 }}>
+            <TextField
+              fullWidth
+              placeholder="Search files by name or type"
+              value={searchTerm}
+              onChange={handleSearchChange}
+              InputProps={{
+                startAdornment: (
+                  <InputAdornment position="start">
+                    <SearchIcon />
+                  </InputAdornment>
+                ),
+              }}
+              sx={{
+                '& .MuiOutlinedInput-root': {
+                  borderRadius: '8px',
+                  backgroundColor: '#f9fafb',
+                }
+              }}
+            />
+          </Box>
+          
           <UploadSection vaultId={vaultId} onFileUploaded={handleFileUploaded} />
-          <FileTable vaultId={vaultId} refreshTrigger={refreshTrigger} />
+          <FileTable vaultId={vaultId} refreshTrigger={refreshTrigger} searchTerm={searchTerm} />
         </div>
       </div>
     </Box>
