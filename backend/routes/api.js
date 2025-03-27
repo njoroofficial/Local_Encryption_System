@@ -80,6 +80,11 @@ router.get('/test', (req, res) => {
   res.json({ message: 'Backend is connected!' });
 });
 
+// Add a health check route for Electron to verify backend connectivity
+router.get('/health', (req, res) => {
+  res.status(200).json({ status: 'ok', timestamp: new Date().toISOString() });
+});
+
 // signup auth route
 router.post('/auth/signup',
   [

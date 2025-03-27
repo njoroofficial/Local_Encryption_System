@@ -1,25 +1,11 @@
-import React, { useState, useEffect } from 'react';
+import React from 'react';
 import { useNavigate } from "react-router-dom";
 import "../../styles/landingPage.css";
 import EnhancedEncryptionIcon from "@mui/icons-material/EnhancedEncryption";
-import { testBackendConnection } from '../../services/api';
+import ElectronInfo from '../ElectronInfo';
 
 function LandingPage() {
   const navigate = useNavigate();
-  const [connectionStatus, setConnectionStatus] = useState('');
-
-  useEffect(() => {
-    const checkConnection = async () => {
-      try {
-        const data = await testBackendConnection();
-        setConnectionStatus(data.message);
-      } catch (error) {
-        setConnectionStatus('Failed to connect to backend');
-      }
-    };
-
-    checkConnection();
-  }, []);
 
   return (
     <div className="landing-container">
@@ -80,9 +66,9 @@ function LandingPage() {
           </div>
         </div>
       </main>
-      <div style={{ position: 'fixed', bottom: 10, right: 10, fontSize: '12px' }}>
-        {connectionStatus && <p>Status: {connectionStatus}</p>}
-      </div>
+      
+      {/* Show ElectronInfo component (includes backend status) */}
+      <ElectronInfo />
     </div>
   );
 }
