@@ -72,12 +72,12 @@ export async function getSecurityRecommendations(userId) {
       {
         type: 'info',
         heading: 'Consider encryption key rotation',
-        text: 'For enhanced security, consider rotating your encryption keys every 90 days'
+        text: 'For enhanced security, consider rotating your encryption keys every 30 days'
       },
       {
         type: 'success',
         heading: 'No security breaches detected',
-        text: 'System has been secure for 365 days'
+        text: 'System has been secure for the past days'
       }
     ];
   }
