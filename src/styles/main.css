@@ -8,20 +8,15 @@
 }
 
 .header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
+  text-align: center;
   margin-bottom: 3rem;
   width: 100%;
   position: relative;
-<<<<<<< HEAD
 }
 
 .header-content {
   text-align: center;
   flex: 1;
-=======
->>>>>>> 426c2ced09bee3a227ea81555d375d17ae81e9c4
 }
 
 .header-title {
@@ -170,17 +165,6 @@ body {
   
   .container {
     padding: 1.5rem 1rem;
-  }
-  
-  .header {
-    flex-direction: column;
-    align-items: center;
-    gap: 1rem;
-  }
-  
-  .logout-button {
-    margin-left: 0;
-    align-self: center;
   }
 }
 
@@ -393,17 +377,18 @@ body {
 }
 
 .logout-button {
-  position: absolute;
-  top: 10px;
-  right: 10px;
+  padding: 0.75rem 1.5rem;
+  border-radius: 0.5rem;
+  font-weight: 500;
+  font-size: 0.95rem;
+  text-align: center;
+  transition: all 0.2s ease;
+  border: none;
+  cursor: pointer;
   background-color: #ef4444;
   color: white;
-  border: none;
-  padding: 0.5rem 1rem;
-  border-radius: 0.375rem;
-  font-weight: 500;
-  cursor: pointer;
-  transition: background-color 0.3s ease;
+  margin-left: 1rem;
+  align-self: flex-start;
 }
 
 .logout-button:hover {
