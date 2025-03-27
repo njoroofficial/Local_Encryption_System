@@ -51,10 +51,33 @@
 }
 
 .report-date {
-  color: #6b7280;
   display: flex;
   align-items: center;
-  margin-top: 0.25rem;
+  gap: 0.5rem;
+  margin-bottom: 0.5rem;
+  color: #6b7280;
+  font-size: 0.875rem;
+}
+
+.report-owner {
+  margin-bottom: 0.5rem;
+  color: #4b5563;
+  font-size: 0.875rem;
+  font-weight: 500;
+  display: flex;
+  align-items: center;
+}
+
+.report-owner .owner-details {
+  color: #2563eb;
+  font-weight: 600;
+  margin-left: 0.25rem;
+}
+
+.report-period {
+  margin-bottom: 0;
+  color: #6b7280;
+  font-size: 0.875rem;
 }
 
 .report-actions {

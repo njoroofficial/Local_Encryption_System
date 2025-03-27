@@ -192,11 +192,6 @@ export default function SignIn({ setUserId }) {
         </div>
 
         <div className="cardFooter">
-          <a href="/forgot-password" className="link">
-            {" "}
-            {/* Link to forgot password page */}
-            Forgot your password?
-          </a>
           <p className="footerText">
             Don't have an account?{" "}
             <a href="/signup" className="link">

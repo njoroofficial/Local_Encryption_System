@@ -39,6 +39,7 @@ import FileIcon from '@mui/icons-material/InsertDriveFile'
 import AlertTriangleIcon from '@mui/icons-material/Warning'
 import CheckCircleIcon from '@mui/icons-material/CheckCircle'
 import VpnKeyIcon from '@mui/icons-material/VpnKey'
+import PersonIcon from '@mui/icons-material/Person'
 import '../../../styles/systemReport.css'
 import { 
   getWeeklyActivityStats, 
@@ -70,6 +71,11 @@ export default function SystemReport() {
   const [activityTrend, setActivityTrend] = useState(0);
   const [error, setError] = useState(null);
   const [sessionError, setSessionError] = useState(null);
+  // User data state for report owner details
+  const [userData, setUserData] = useState({
+    name: 'N/A',
+    email: 'N/A'
+  });
   
   // Security data states
   const [securityData, setSecurityData] = useState([]);
@@ -406,35 +412,40 @@ export default function SystemReport() {
       });
       
       // Calculate dimensions to fit content
-      const imgWidth = 210; // A4 width in mm
-      const pageHeight = 295; // A4 height in mm
+      const imgWidth = 190; // Slightly smaller than A4 width to add margins
+      const pageHeight = 277; // A4 height minus margins
       const imgHeight = (canvas.height * imgWidth) / canvas.width;
       
-      // Add title and metadata
-      pdf.setFontSize(16);
-      pdf.text('System Performance Report', 105, 15, { align: 'center' });
-      pdf.setFontSize(10);
-      pdf.text(`Generated on ${new Date().toLocaleDateString()}`, 105, 22, { align: 'center' });
-      pdf.text(`Period: ${formatPeriodLabel(reportPeriod)}`, 105, 27, { align: 'center' });
-      pdf.text(`Report Type: ${reportTypeLabel}`, 105, 32, { align: 'center' });
+      // We're not adding the extra metadata header since it's already in the captured image
+      // The report header from the UI will be included in the image capture
       
-      // Start content after header
-      let position = 40;
+      // Start content right at the top of the page with minimal margin
+      let position = 10;
       
-      // Add the report image
-      pdf.addImage(imgData, 'PNG', 10, position, imgWidth - 20, imgHeight);
-      
-      // If content is longer than one page, add additional pages
+      // Handle multi-page content
       let heightLeft = imgHeight;
       
+      // First page
+      pdf.addImage(imgData, 'PNG', 10, position, imgWidth, imgHeight);
+      heightLeft -= (pageHeight - position);
+      
+      // Add additional pages if content exceeds first page
+      let page = 1;
       while (heightLeft > 0) {
-        position = heightLeft - imgHeight;
-        heightLeft -= pageHeight;
+        pdf.addPage();
+        page++;
         
-        if (heightLeft > 0) {
-          pdf.addPage();
-          pdf.addImage(imgData, 'PNG', 10, position, imgWidth - 20, imgHeight);
-        }
+        // Position is negative to show the part of the image that goes beyond the first page
+        pdf.addImage(
+          imgData, 
+          'PNG', 
+          10, // x position 
+          -(pageHeight * (page - 1)) + position, // y position adjusted for each page
+          imgWidth, 
+          imgHeight
+        );
+        
+        heightLeft -= pageHeight;
       }
       
       // Add footer
@@ -456,6 +467,26 @@ export default function SystemReport() {
       document.querySelectorAll('.pdf-hidden').forEach(element => {
         element.classList.remove('pdf-hidden');
       });
+      
+      // Show notification about successful download
+      const downloadMessage = document.createElement('div');
+      downloadMessage.className = 'pdf-download-success';
+      downloadMessage.innerHTML = `
+        <div style="position: fixed; bottom: 20px; right: 20px; background-color: #10b981; color: white; 
+                    padding: 12px 20px; border-radius: 4px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); 
+                    display: flex; align-items: center; z-index: 9999;">
+          <span style="margin-right: 8px;">✓</span>
+          <span>PDF report successfully downloaded</span>
+        </div>
+      `;
+      document.body.appendChild(downloadMessage);
+      
+      // Remove notification after 3 seconds
+      setTimeout(() => {
+        if (document.body.contains(downloadMessage)) {
+          document.body.removeChild(downloadMessage);
+        }
+      }, 3000);
       
       // End loading state
       setLoading(false);
@@ -601,6 +632,58 @@ export default function SystemReport() {
     }
   }, [activeTab, reportType]);
 
+  // Load user data for report owner details on component mount
+  useEffect(() => {
+    try {
+      // Try to get user data from localStorage
+      const storedUserData = JSON.parse(localStorage.getItem('userData'));
+      let userEmail = 'N/A';
+      
+      if (storedUserData) {
+        // Try multiple possible property names for user's email
+        userEmail = storedUserData.email || 
+                    storedUserData.userEmail || 
+                    storedUserData.emailAddress ||
+                    storedUserData.mail ||
+                    storedUserData.user?.email;
+      }
+      
+      // If we still don't have user email, try to get it from other sources
+      if (userEmail === 'N/A') {
+        // Check if user data is available in global window object (sometimes apps store it there)
+        if (window.user || window.currentUser || window.userDetails || window.userInfo) {
+          const globalUser = window.user || window.currentUser || window.userDetails || window.userInfo;
+          userEmail = globalUser.email || 
+                      globalUser.userEmail || 
+                      globalUser.emailAddress ||
+                      globalUser.mail;
+        }
+        
+        // If we have user ID but no email, create a placeholder
+        if (userEmail === 'N/A' && storedUserData && storedUserData.userId) {
+          userEmail = `user-${storedUserData.userId}@example.com`;
+        }
+      }
+      
+      // Set default value if still not found
+      if (userEmail === 'N/A') userEmail = 'user@example.com';
+      
+      console.log('Setting user email for report:', userEmail);
+      
+      setUserData({
+        name: 'Current User', // We keep this for internal use even though we don't display it
+        email: userEmail
+      });
+    } catch (err) {
+      console.error('Error loading user data for report:', err);
+      // Set default value if there's an error
+      setUserData({
+        name: 'Current User',
+        email: 'user@example.com'
+      });
+    }
+  }, []);
+
   // Determine if a section should be visible based on report type
   const isVisible = (sectionType) => {
     return reportType === 'all' || reportType === sectionType;
@@ -645,6 +728,10 @@ export default function SystemReport() {
                 day: 'numeric' 
               })}
             </p>
+            <p className="report-owner">
+              <PersonIcon className="icon-sm" />
+              Report Owner: <span className="owner-details">{userData.email}</span>
+            </p>
             <p className="report-period">
               Time Period: {formatPeriodLabel(reportPeriod)}
             </p>
@@ -657,7 +744,7 @@ export default function SystemReport() {
               startIcon={<FileTextIcon />}
               disabled={loading}
             >
-              {loading ? 'Generating PDF...' : 'Download PDF'}
+              {loading ? 'Generating PDF...' : 'Download PDF Report'}
             </Button>
           </div>
         </div>
