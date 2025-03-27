@@ -17,6 +17,7 @@ function WelcomePage() {
   return (
     <div className="container">
       <header className="header">
+<<<<<<< HEAD
         <div className="header-content">
           <h1 className="header-title">Welcome to Your Secure Vault</h1>
           <p className="header-description">
@@ -24,6 +25,13 @@ function WelcomePage() {
           </p>
         </div>
         <button onClick={handleLogout} className="logout-button">
+=======
+        <h1 className="header-title">Welcome to Your Secure Vault</h1>
+        <p className="header-description">
+          Your personal encryption and storage management system
+        </p>
+        <button className="logout-button" onClick={handleLogout}>
+>>>>>>> 426c2ced09bee3a227ea81555d375d17ae81e9c4
           Logout
         </button>
       </header>

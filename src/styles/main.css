@@ -14,11 +14,14 @@
   margin-bottom: 3rem;
   width: 100%;
   position: relative;
+<<<<<<< HEAD
 }
 
 .header-content {
   text-align: center;
   flex: 1;
+=======
+>>>>>>> 426c2ced09bee3a227ea81555d375d17ae81e9c4
 }
 
 .header-title {
