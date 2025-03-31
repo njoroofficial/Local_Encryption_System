@@ -257,6 +257,77 @@ export default function SystemReport() {
     
     fetchActivityData();
   }, [reportPeriod]);
+
+  // Add weekly refresh for activity trends data
+  useEffect(() => {
+    // Function to refresh activity data
+    const refreshActivityData = async () => {
+      console.log('Weekly refresh: Updating activity trends data');
+      setLoading(true);
+      setError(null);
+      
+      try {
+        // Get userId from localStorage
+        const userData = JSON.parse(localStorage.getItem('userData'));
+        if (!userData || !userData.userId) {
+          console.error('User data not found during refresh');
+          return;
+        }
+        
+        const userId = userData.userId;
+        const { startDate, endDate } = getDateRangeForPeriod(reportPeriod);
+        
+        // Fetch fresh data with current date range
+        const data = await getWeeklyActivityStats(userId, startDate, endDate);
+        const formattedData = formatActivityData(data);
+        
+        // Update state with fresh data
+        setActivityData(formattedData);
+        
+        // Also update trend data
+        const previousPeriod = calculatePreviousPeriod(reportPeriod);
+        const { startDate: prevStartDate, endDate: prevEndDate } = getDateRangeForPeriod(previousPeriod);
+        
+        const previousData = await getWeeklyActivityStats(userId, prevStartDate, prevEndDate);
+        const formattedPreviousData = formatActivityData(previousData);
+        
+        const trend = calculateActivityTrend(formattedData, formattedPreviousData);
+        setActivityTrend(trend);
+        
+        console.log('Activity data refreshed successfully');
+      } catch (err) {
+        console.error('Error refreshing activity data:', err);
+        // Don't update state with error, just log it
+      } finally {
+        setLoading(false);
+      }
+    };
+    
+    // Set up weekly interval (7 days in milliseconds)
+    const weeklyInterval = 7 * 24 * 60 * 60 * 1000;
+    
+    // Start with immediate refresh if we have user data
+    try {
+      const userData = JSON.parse(localStorage.getItem('userData'));
+      if (userData && userData.userId) {
+        // Initial refresh after component mounts (with small delay to avoid conflict)
+        const initialTimer = setTimeout(() => {
+          refreshActivityData();
+        }, 1000);
+        
+        // Weekly interval for continuous updates
+        const weeklyTimer = setInterval(refreshActivityData, weeklyInterval);
+        
+        // Clean up timers on component unmount
+        return () => {
+          clearTimeout(initialTimer);
+          clearInterval(weeklyTimer);
+        };
+      }
+    } catch (err) {
+      console.error('Error setting up activity refresh:', err);
+    }
+  }, [reportPeriod]); // Re-establish interval when report period changes
   
   // Fetch user session data when report period changes
   useEffect(() => {
