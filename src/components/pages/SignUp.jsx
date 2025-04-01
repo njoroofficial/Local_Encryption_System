@@ -20,9 +20,7 @@ export default function SignUp() {
   });
   const [errors, setErrors] = useState({});
   const [generalError, setGeneralError] = useState("");
-  const [success, setSuccess] = useState("");
   const [isLoading, setIsLoading] = useState(false);
-  const [isVerificationStep, setIsVerificationStep] = useState(false);
   const [fieldTouched, setFieldTouched] = useState({
     first_name: false,
     last_name: false,
@@ -163,7 +161,6 @@ export default function SignUp() {
   const handleSubmit = async (e) => {
     e.preventDefault();
     setGeneralError("");
-    setSuccess("");
     
     // Mark all fields as touched
     const allTouched = Object.keys(fieldTouched).reduce((acc, key) => {
@@ -197,9 +194,8 @@ export default function SignUp() {
       // eslint-disable-next-line no-unused-vars
       const data = await signUp(userData);
       
-      // Success case
-      setIsVerificationStep(true);
-      setSuccess(`Registration successful! Please check your email (${formData.email}) to verify your account.`);
+      // Success case - directly redirect to sign in page
+      navigate('/SignIn');
     } catch (error) {
       console.error("Error during signup:", error);
       
@@ -223,38 +219,6 @@ export default function SignUp() {
       setIsLoading(false);
     }
   };
-
-  const handleBackToSignIn = () => {
-    navigate("/SignIn");
-  };
-
-  // If we're showing verification instructions
-  if (isVerificationStep) {
-    return (
-      <div className="signup-container">
-        <div className="signup-card">
-          <h2 className="signup-title">Verify Your Email</h2>
-          <div className="verification-message">
-            <p>{success}</p>
-            <div className="verification-instructions">
-              <h3>Next steps:</h3>
-              <ol>
-                <li>Check your email inbox (and spam folder)</li>
-                <li>Click the verification link in the email</li>
-                <li>Once verified, you can sign in to your account</li>
-              </ol>
-            </div>
-          </div>
-          <button 
-            className="signup-button" 
-            onClick={handleBackToSignIn}
-          >
-            Go to Sign In
-          </button>
-        </div>
-      </div>
-    );
-  }
 
   // Regular signup form
   return (

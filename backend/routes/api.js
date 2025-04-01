@@ -129,7 +129,8 @@ router.post('/auth/signup',
           data:{
             first_name:first_name,
             last_name:last_name
-          }
+          },
+          emailConfirm: true // Auto-confirm the email without verification
         }
       });
 

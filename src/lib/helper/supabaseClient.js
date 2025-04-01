@@ -11,6 +11,7 @@ const supabase = createClient(supabaseUrl, supabaseAnonKey, {
     persistSession: true,
     detectSessionInUrl: true,
     redirectTo: redirectUrl,
+    skipVerification: true,
   }
 });
 

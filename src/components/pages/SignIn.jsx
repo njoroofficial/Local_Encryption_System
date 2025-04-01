@@ -5,7 +5,7 @@ import VisibilityOffIcon from '@mui/icons-material/VisibilityOff';
 import VisibilityIcon from '@mui/icons-material/Visibility';
 import "../../styles/signIn.css";
 import { useNavigate } from "react-router-dom";
-import { signIn, resendVerificationEmail } from "../../services/api";
+import { signIn } from "../../services/api";
 import PropTypes from 'prop-types';
 
 export default function SignIn({ setUserId }) {
@@ -23,10 +23,6 @@ export default function SignIn({ setUserId }) {
   // State to manage loading state
   const [isLoading, setIsLoading] = useState(false);
 
-  // State for email verification error
-  const [verificationError, setVerificationError] = useState(false);
-  const [userEmail, setUserEmail] = useState("");
-
   // function that handle changes in input fields
   function handleInputChange(event) {
     const { name, value } = event.target;
@@ -38,7 +34,6 @@ export default function SignIn({ setUserId }) {
   const handleSubmit = async (event) => {
     event.preventDefault();
     setError("");
-    setVerificationError(false);
     setIsLoading(true);
 
     try {
@@ -65,27 +60,7 @@ export default function SignIn({ setUserId }) {
       navigate("/welcome-page");
     } catch (err) {
       console.error("Sign in error:", err);
-      
-      // Check if it's an email verification error
-      if (err.message && err.message.includes("Email not confirmed")) {
-        setVerificationError(true);
-        setUserEmail(formData.email);
-      } else {
-        setError(err.message || "Invalid email or password");
-      }
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  // Handle resend verification email
-  const handleResendVerification = async () => {
-    try {
-      setIsLoading(true);
-      await resendVerificationEmail(userEmail);
-      alert(`Verification email resent to ${userEmail}. Please check your inbox.`);
-    } catch (err) {
-      setError(err.message || "Failed to resend verification email");
+      setError(err.message || "Invalid email or password");
     } finally {
       setIsLoading(false);
     }
@@ -163,20 +138,6 @@ export default function SignIn({ setUserId }) {
             {error && (
               <div className="alert">
                 <span className="alertText">{error}</span>
-              </div>
-            )}
-
-            {verificationError && (
-              <div className="verification-error">
-                <p>Your email is not verified. Please check your inbox for the verification link.</p>
-                <p>If you didn't receive the email, click the button below to resend.</p>
-                <button
-                  type="button"
-                  className="resend-verification"
-                  onClick={handleResendVerification}
-                >
-                  Resend Verification Email
-                </button>
               </div>
             )}
 
