@@ -1,10 +1,5 @@
 # LOCAL ENCRYPTION AND STORAGE MANAGEMENT SYSTEM
 
-Name: Moses Njoroge Wairimu
-Registration Number: J17S/14486/2021
-Supervisor: Dr. Joseph Muriuki
-Academic Year: 2024/2025
-
 ## SYSTEM DESCRIPTION
 
 The Local Encryption and Storage Management System is a secure vault application that allows users to encrypt, store, and manage sensitive files locally on their computer. The system provides a secure environment for storing confidential data with strong encryption methods.
@@ -12,7 +7,7 @@ The Local Encryption and Storage Management System is a secure vault application
 ## INSTALLATION INSTRUCTIONS
 
 ### System Requirements
-- Windows, macOS, or Linux operating system
+- Windows operating system
 - Node.js (v14 or higher)
 - npm (v6 or higher)
 
@@ -69,4 +64,4 @@ The Local Encryption and Storage Management System is a secure vault application
 
 For any issues or questions, please contact:
 - Moses Njoroge Wairimu
-- Email: [YOUR EMAIL ADDRESS] 
+- Email: mosesn579@gmail.com 
